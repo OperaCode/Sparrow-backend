@@ -25,6 +25,10 @@ function tsxCli(): string {
 
 const TSX_CLI = tsxCli();
 
+// Each test spawns tsx in a fresh process, which takes 3 to 4 seconds on
+// Windows and leaves no headroom under the 5 second default.
+const SCRIPT_TEST_TIMEOUT_MS = 20_000;
+
 function runScript(args: string[], env: NodeJS.ProcessEnv) {
   const result = spawnSync(process.execPath, [TSX_CLI, SCRIPT, ...args], {
     env: {
@@ -52,7 +56,7 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-describe('issue-dev-token script', () => {
+describe('issue-dev-token script', { timeout: SCRIPT_TEST_TIMEOUT_MS }, () => {
   it.each(['production', 'test'])(
     'refuses to run when NODE_ENV is %s',
     async (nodeEnv) => {
