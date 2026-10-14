@@ -10,6 +10,7 @@ import {
   testDatabaseUrl,
   truncateAllTables,
 } from '../../helpers/database.js';
+import { encodedServiceAccount } from '../../helpers/firebase-service-account.js';
 
 const prisma = createTestPrisma();
 const SCRIPT = path.resolve('scripts/issue-dev-token.ts');
@@ -62,7 +63,12 @@ describe('issue-dev-token script', { timeout: SCRIPT_TEST_TIMEOUT_MS }, () => {
     async (nodeEnv) => {
       const result = runScript(
         ['--phone', '+2348040000001', '--role', 'admin'],
-        { NODE_ENV: nodeEnv },
+        // A complete production config, so the script's own guard is what
+        // refuses rather than config validation.
+        {
+          NODE_ENV: nodeEnv,
+          FIREBASE_SERVICE_ACCOUNT_BASE64: encodedServiceAccount(),
+        },
       );
 
       expect(result.status).toBe(1);
