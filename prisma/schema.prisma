@@ -1,0 +1,157 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  customer
+  rider
+  admin
+
+  @@map("user_role")
+}
+
+enum UserStatus {
+  active
+  suspended
+
+  @@map("user_status")
+}
+
+/// Phone format (E.164) is also enforced by a CHECK constraint in the
+/// migration, which Prisma cannot express in the schema.
+model User {
+  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  phone     String     @unique @db.VarChar(16)
+  role      UserRole   @default(customer)
+  status    UserStatus @default(active)
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  orders Order[] @relation("OrderCustomer")
+  quotes Order[] @relation("OrderQuotedBy")
+
+  @@map("users")
+}
+
+enum PricingComponent {
+  standard_zone
+  special_pickup
+  errand
+
+  @@map("pricing_component")
+}
+
+enum QuoteMode {
+  automatic
+  manual
+
+  @@map("quote_mode")
+}
+
+enum PricingStatus {
+  auto
+  pending_manual_quote
+  manual_quoted
+
+  @@map("pricing_status")
+}
+
+enum ServiceType {
+  standard
+  special_pickup
+  errand
+
+  @@map("service_type")
+}
+
+/// A community in the corridor, an extended Agbara movement, or outside the
+/// service area. Zone tiers are derived from a pair of places, not stored here.
+enum Place {
+  igbesa
+  lusada
+  ketu
+  extended
+  outside
+
+  @@map("place")
+}
+
+enum ZoneTier {
+  A
+  B
+  C
+  extended
+  outside_area
+
+  @@map("zone_tier")
+}
+
+enum SpecialPickupTier {
+  local
+  nearby
+  extended
+  outside_area
+
+  @@map("special_pickup_tier")
+}
+
+enum ErrandTier {
+  simple
+  moderate
+  complex
+
+  @@map("errand_tier")
+}
+
+/// Live price list. Amounts are whole naira. Manual tiers have no amount;
+/// operations agrees a price per order. Editing a row does not change orders
+/// already priced.
+model PriceRule {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  component   PricingComponent
+  tier        String           @db.VarChar(32)
+  amountNaira Int?             @map("amount_naira")
+  quoteMode   QuoteMode        @map("quote_mode")
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([component, tier])
+  @@map("price_rules")
+}
+
+/// Component amounts and totalNaira are copied at pricing time. They are the
+/// amount due for that order and are not recomputed when price rules change.
+model Order {
+  id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId String  @map("customer_id") @db.Uuid
+  customer   User    @relation("OrderCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  quotedById String? @map("quoted_by_id") @db.Uuid
+  quotedBy   User?   @relation("OrderQuotedBy", fields: [quotedById], references: [id], onDelete: Restrict)
+
+  serviceType      ServiceType @map("service_type")
+  pickupPlace      Place?      @map("pickup_place")
+  destinationPlace Place?      @map("destination_place")
+  collectionPlace  Place?      @map("collection_place")
+  errandTier       ErrandTier? @map("errand_tier")
+
+  pricingStatus            PricingStatus      @map("pricing_status")
+  zoneTier                 ZoneTier?          @map("zone_tier")
+  zoneAmountNaira          Int?               @map("zone_amount_naira")
+  specialPickupTier        SpecialPickupTier? @map("special_pickup_tier")
+  specialPickupAmountNaira Int?               @map("special_pickup_amount_naira")
+  errandAmountNaira        Int?               @map("errand_amount_naira")
+  totalNaira               Int?               @map("total_naira")
+  quotedAt                 DateTime?          @map("quoted_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([customerId])
+  @@map("orders")
+}
