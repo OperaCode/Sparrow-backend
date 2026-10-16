@@ -5,6 +5,12 @@ import { UnauthorizedError } from '../../http/errors.js';
 
 export interface AccessTokenClaims {
   userId: string;
+  sessionId: string;
+}
+
+export interface SignedAccessToken {
+  token: string;
+  expiresAt: Date;
 }
 
 export interface AccessTokenVerifier {
@@ -23,7 +29,7 @@ export const ACCESS_TOKEN_TYPE = 'at+jwt';
 
 const CLOCK_TOLERANCE_SECONDS = 5;
 
-const subjectSchema = z.uuid();
+const claimsSchema = z.object({ sub: z.uuid(), sid: z.uuid() });
 
 function secretKey(config: AuthConfig): Uint8Array {
   return new TextEncoder().encode(config.accessTokenSecret);
@@ -43,9 +49,10 @@ export function createAccessTokenVerifier(
           audience: config.audience,
           typ: ACCESS_TOKEN_TYPE,
           clockTolerance: CLOCK_TOLERANCE_SECONDS,
-          requiredClaims: ['sub', 'exp', 'iat'],
+          requiredClaims: ['sub', 'sid', 'exp', 'iat'],
         });
-        return { userId: subjectSchema.parse(payload.sub) };
+        const claims = claimsSchema.parse(payload);
+        return { userId: claims.sub, sessionId: claims.sid };
       } catch {
         // Every failure looks the same to the caller so the response cannot
         // be used to probe which check failed.
@@ -56,20 +63,23 @@ export function createAccessTokenVerifier(
 }
 
 /**
- * Issues an access token. Used by the development token script now and by
- * the OTP login flow later; no HTTP endpoint issues tokens yet.
+ * Issues an access token bound to a session. The sid claim lets
+ * authenticate reject the token as soon as its session is revoked.
  */
 export async function signAccessToken(
   config: AuthConfig,
-  userId: string,
+  claims: AccessTokenClaims,
   ttlSeconds: number,
-): Promise<string> {
-  return new SignJWT()
+): Promise<SignedAccessToken> {
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const expiresAt = issuedAt + ttlSeconds;
+  const token = await new SignJWT({ sid: claims.sessionId })
     .setProtectedHeader({ alg: ALGORITHM, typ: ACCESS_TOKEN_TYPE })
-    .setSubject(userId)
+    .setSubject(claims.userId)
     .setIssuer(config.issuer)
     .setAudience(config.audience)
-    .setIssuedAt()
-    .setExpirationTime(`${ttlSeconds}s`)
+    .setIssuedAt(issuedAt)
+    .setExpirationTime(expiresAt)
     .sign(secretKey(config));
+  return { token, expiresAt: new Date(expiresAt * 1000) };
 }

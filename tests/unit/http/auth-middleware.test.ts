@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AuthSubjectLookup } from '../../../src/http/middleware/authenticate.js';
 import type { AccountStatus, Role } from '../../../src/types/auth.js';
 import {
@@ -10,14 +10,15 @@ import {
 import { errorOf } from '../../helpers/http.js';
 
 const USER_ID = '3f0e0c9a-6b1e-4c43-9a51-2c4b0f6d8a11';
+const SESSION_ID = '9b2d4a63-1c7e-4f0a-8d35-6e1f2a3b4c5d';
 
 function subjects(
   role: Role | null,
   status: AccountStatus = 'active',
 ): AuthSubjectLookup {
   return {
-    findAuthSubjectById: (id) =>
-      Promise.resolve(role === null ? null : { id, role, status }),
+    findAuthSubject: (userId) =>
+      Promise.resolve(role === null ? null : { id: userId, role, status }),
   };
 }
 
@@ -57,7 +58,7 @@ describe('authenticate', () => {
     expect(errorOf(response).code).toBe('UNAUTHENTICATED');
   });
 
-  it('returns the same 401 when the user no longer exists', async () => {
+  it('returns the same 401 when the session or user is gone', async () => {
     const response = await request(appWith(null))
       .get('/api/v1/test-protected/any')
       .set('Authorization', `Bearer ${await tokenFor(USER_ID)}`)
@@ -67,6 +68,30 @@ describe('authenticate', () => {
       code: 'UNAUTHENTICATED',
       message: 'Authentication required',
     });
+  });
+
+  it('looks the subject up through the session named in the token', async () => {
+    const findAuthSubject = vi.fn<AuthSubjectLookup['findAuthSubject']>(
+      (userId) =>
+        Promise.resolve({ id: userId, role: 'customer', status: 'active' }),
+    );
+    const { app } = buildTestApp({
+      authSubjects: { findAuthSubject },
+      v1Modules: [protectedTestModule],
+    });
+
+    await request(app)
+      .get('/api/v1/test-protected/any')
+      .set(
+        'Authorization',
+        `Bearer ${await tokenFor(USER_ID, undefined, SESSION_ID)}`,
+      )
+      .expect(200);
+
+    expect(findAuthSubject).toHaveBeenCalledExactlyOnceWith(
+      USER_ID,
+      SESSION_ID,
+    );
   });
 
   it('returns 403 ACCOUNT_SUSPENDED for a suspended user', async () => {

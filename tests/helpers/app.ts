@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Router, type Express } from 'express';
 import type { RouteGuards, V1Module } from '../../src/api/v1/router.js';
 import { createApp } from '../../src/app.js';
@@ -30,7 +31,7 @@ export const healthyRepository: HealthRepository = {
 };
 
 export const noSubjects: AuthSubjectLookup = {
-  findAuthSubjectById: () => Promise.resolve(null),
+  findAuthSubject: () => Promise.resolve(null),
 };
 
 /**
@@ -101,10 +102,19 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
   return { app, config, logs, logger };
 }
 
-export function tokenFor(
+/**
+ * Signs an access token without a database session. Only valid against a
+ * fake AuthSubjectLookup; integration tests use createTestAccount instead.
+ */
+export async function tokenFor(
   userId: string,
   config: Config = testConfig(),
-  ttlSeconds = 300,
+  sessionId: string = randomUUID(),
 ): Promise<string> {
-  return signAccessToken(config.auth, userId, ttlSeconds);
+  const { token } = await signAccessToken(
+    config.auth,
+    { userId, sessionId },
+    300,
+  );
+  return token;
 }
