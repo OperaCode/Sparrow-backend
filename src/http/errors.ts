@@ -5,6 +5,7 @@ export type ErrorCode =
   | 'UNAUTHENTICATED'
   | 'FORBIDDEN'
   | 'ACCOUNT_SUSPENDED'
+  | 'PHONE_NOT_SUPPORTED'
   | 'NOT_FOUND'
   | 'CONFLICT'
   | 'PAYLOAD_TOO_LARGE'

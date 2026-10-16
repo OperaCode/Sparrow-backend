@@ -32,6 +32,24 @@ export default defineConfig(
     },
   },
   {
+    // The Admin SDK holds the service account, so it stays behind one adapter.
+    ignores: ['src/modules/auth/firebase/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['firebase-admin', 'firebase-admin/*'],
+              message:
+                'Import firebase-admin only in src/modules/auth/firebase/.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ['**/*.js'],
     extends: [tseslint.configs.disableTypeChecked],
   },
