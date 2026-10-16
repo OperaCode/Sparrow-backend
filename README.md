@@ -4,17 +4,17 @@ The Sparrow API: a Node.js and TypeScript service that replaces the earlier Supa
 
 ## Stack
 
-| Concern       | Choice                                               |
-| ------------- | ---------------------------------------------------- |
-| Runtime       | Node.js 24 (CI); 22.12 or newer works locally        |
-| Language      | TypeScript, strict, ESM (`NodeNext`)                 |
-| HTTP          | Express 5                                            |
-| Database      | PostgreSQL 17, Prisma 7 with the `pg` driver adapter |
-| Validation    | Zod                                                  |
-| Logging       | Pino, pino-http                                      |
-| Auth          | HS256 access tokens verified with `jose`             |
-| Abuse control | express-rate-limit, helmet, CORS allowlist           |
-| Tests         | Vitest, Supertest                                    |
+| Concern       | Choice                                                                             |
+| ------------- | ---------------------------------------------------------------------------------- |
+| Runtime       | Node.js 24 (CI); 22.12 or newer works locally                                      |
+| Language      | TypeScript, strict, ESM (`NodeNext`)                                               |
+| HTTP          | Express 5                                                                          |
+| Database      | PostgreSQL 17, Prisma 7 with the `pg` driver adapter                               |
+| Validation    | Zod                                                                                |
+| Logging       | Pino, pino-http                                                                    |
+| Auth          | Firebase Phone Auth, then HS256 access tokens (`jose`) and rotating refresh tokens |
+| Abuse control | express-rate-limit, helmet, CORS allowlist                                         |
+| Tests         | Vitest, Supertest                                                                  |
 
 ## Local setup
 
@@ -46,41 +46,48 @@ If port 5433 is already in use, set `POSTGRES_PORT` in `.env` to a free port and
 
 ## Scripts
 
-| Script                              | Purpose                                                                   |
-| ----------------------------------- | ------------------------------------------------------------------------- |
-| `dev`                               | Run the API with reload, loading `.env` if present                        |
-| `build` / `start`                   | Compile to `dist/` and run the compiled server                            |
-| `typecheck`, `lint`, `format:check` | Static checks run in CI                                                   |
-| `test`                              | Unit and integration tests (Docker database must be running)              |
-| `test:unit`                         | Unit tests only, no database needed                                       |
-| `test:integration`                  | Integration tests against `TEST_DATABASE_URL`                             |
-| `test:coverage`                     | All tests with coverage; fails below 80% of lines                         |
-| `db:migrate`                        | Apply pending migrations (`prisma migrate deploy`)                        |
-| `db:migrate:dev`                    | Create and apply a new migration during development                       |
-| `db:reset`                          | Drop and recreate the database from migrations. Local only, destroys data |
-| `db:check-drift`                    | Fail if `schema.prisma` differs from the migrated database                |
-| `db:generate`                       | Regenerate the Prisma client (also runs on install)                       |
-| `token:dev`                         | Issue a local access token, see [Development tokens](#development-tokens) |
+| Script                              | Purpose                                                                                  |
+| ----------------------------------- | ---------------------------------------------------------------------------------------- |
+| `dev`                               | Run the API with reload, loading `.env` if present                                       |
+| `build` / `start`                   | Compile to `dist/` and run the compiled server                                           |
+| `typecheck`, `lint`, `format:check` | Static checks run in CI                                                                  |
+| `test`                              | Unit and integration tests (Docker database must be running)                             |
+| `test:unit`                         | Unit tests only, no database needed                                                      |
+| `test:integration`                  | Integration tests against `TEST_DATABASE_URL`                                            |
+| `test:coverage`                     | All tests with coverage; fails below 80% of lines                                        |
+| `db:migrate`                        | Apply pending migrations (`prisma migrate deploy`)                                       |
+| `db:migrate:dev`                    | Create and apply a new migration during development                                      |
+| `db:reset`                          | Drop and recreate the database from migrations. Local only, destroys data                |
+| `db:check-drift`                    | Fail if `schema.prisma` differs from the migrated database                               |
+| `db:generate`                       | Regenerate the Prisma client (also runs on install)                                      |
+| `token:dev`                         | Open a local session and print its tokens, see [Development tokens](#development-tokens) |
 
 ## Environment variables
 
 All variables are validated at startup by `src/config/env.ts`. On invalid configuration the server exits and prints the failing variable names, never their values. See `.env.example` for the documented defaults.
 
-| Variable                                                             | Required     | Default                                 | Notes                                                |
-| -------------------------------------------------------------------- | ------------ | --------------------------------------- | ---------------------------------------------------- |
-| `NODE_ENV`                                                           | Yes          | none                                    | `development`, `test` or `production`                |
-| `PORT`                                                               | No           | `4000`                                  |                                                      |
-| `LOG_LEVEL`                                                          | No           | `info`                                  | Pino level                                           |
-| `DATABASE_URL`                                                       | Yes          | none                                    | `postgresql://` URL                                  |
-| `JWT_ACCESS_SECRET`                                                  | Yes          | none                                    | At least 32 characters                               |
-| `JWT_ISSUER`                                                         | No           | `sparrow-api`                           |                                                      |
-| `JWT_AUDIENCE`                                                       | No           | `sparrow-app`                           |                                                      |
-| `CORS_ORIGINS`                                                       | No           | empty                                   | Comma-separated origins; must be https in production |
-| `TRUST_PROXY`                                                        | No           | `0`                                     | Proxy hops in front of the API; `1` on Render        |
-| `RATE_LIMIT_WINDOW_MS`                                               | No           | `60000`                                 |                                                      |
-| `RATE_LIMIT_MAX`                                                     | No           | `100`                                   | Requests per window per client IP on `/api`          |
-| `TEST_DATABASE_URL`                                                  | Tests only   | `...5433/sparrow_test`                  | Name must end in `_test`                             |
-| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT` | Compose only | `sparrow`, `sparrow`, `sparrow`, `5433` | Local database container                             |
+| Variable                                                             | Required     | Default                                 | Notes                                                                        |
+| -------------------------------------------------------------------- | ------------ | --------------------------------------- | ---------------------------------------------------------------------------- |
+| `NODE_ENV`                                                           | Yes          | none                                    | `development`, `test` or `production`                                        |
+| `PORT`                                                               | No           | `4000`                                  |                                                                              |
+| `LOG_LEVEL`                                                          | No           | `info`                                  | Pino level                                                                   |
+| `DATABASE_URL`                                                       | Yes          | none                                    | `postgresql://` URL                                                          |
+| `JWT_ACCESS_SECRET`                                                  | Yes          | none                                    | At least 32 characters                                                       |
+| `JWT_ISSUER`                                                         | No           | `sparrow-api`                           |                                                                              |
+| `JWT_AUDIENCE`                                                       | No           | `sparrow-app`                           |                                                                              |
+| `CORS_ORIGINS`                                                       | No           | empty                                   | Comma-separated origins; must be https in production                         |
+| `TRUST_PROXY`                                                        | No           | `0`                                     | Proxy hops in front of the API; `1` on Render                                |
+| `RATE_LIMIT_WINDOW_MS`                                               | No           | `60000`                                 |                                                                              |
+| `RATE_LIMIT_MAX`                                                     | No           | `100`                                   | Requests per window per client IP on `/api`                                  |
+| `FIREBASE_SERVICE_ACCOUNT_BASE64`                                    | Production   | empty                                   | Base64 of the service account JSON key file; without it, sign-in returns 503 |
+| `AUTH_ACCESS_TOKEN_TTL_SECONDS`                                      | No           | `900`                                   | 60 to 3600                                                                   |
+| `AUTH_REFRESH_TOKEN_TTL_DAYS`                                        | No           | `30`                                    | Idle timeout; must not exceed the session max age                            |
+| `AUTH_SESSION_MAX_AGE_DAYS`                                          | No           | `90`                                    | Absolute session lifetime, then a new OTP                                    |
+| `AUTH_FIREBASE_MAX_AUTH_AGE_SECONDS`                                 | No           | `300`                                   | How recent the OTP sign-in must be to exchange it                            |
+| `AUTH_EXCHANGE_RATE_LIMIT_WINDOW_MS`, `AUTH_EXCHANGE_RATE_LIMIT_MAX` | No           | `900000`, `30`                          | Per-IP limit on `POST /auth/firebase`                                        |
+| `AUTH_REFRESH_RATE_LIMIT_WINDOW_MS`, `AUTH_REFRESH_RATE_LIMIT_MAX`   | No           | `900000`, `30`                          | Per-IP limit shared by refresh and logout                                    |
+| `TEST_DATABASE_URL`                                                  | Tests only   | `...5433/sparrow_test`                  | Name must end in `_test`                                                     |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT` | Compose only | `sparrow`, `sparrow`, `sparrow`, `5433` | Local database container                                                     |
 
 ## Project structure
 
@@ -153,14 +160,15 @@ Error:
 | 400    | `VALIDATION_ERROR`    | Params, query or body failed schema validation          |
 | 400    | `INVALID_JSON`        | Malformed JSON body                                     |
 | 400    | `BAD_REQUEST`         | Other malformed requests                                |
-| 401    | `UNAUTHENTICATED`     | Missing, invalid or expired token, or unknown user      |
+| 401    | `UNAUTHENTICATED`     | Missing, invalid or expired token, or revoked session   |
 | 403    | `FORBIDDEN`           | Authenticated but not allowed                           |
 | 403    | `ACCOUNT_SUSPENDED`   | User is suspended                                       |
+| 403    | `PHONE_NOT_SUPPORTED` | Sign-in with a number that is not a Nigerian mobile     |
 | 404    | `NOT_FOUND`           | Unknown route or resource                               |
 | 409    | `CONFLICT`            | Uniqueness or state conflict                            |
 | 413    | `PAYLOAD_TOO_LARGE`   | JSON body over 100 kB                                   |
 | 429    | `RATE_LIMITED`        | Rate limit exceeded; see `Retry-After`                  |
-| 503    | `SERVICE_UNAVAILABLE` | A dependency is down (readiness)                        |
+| 503    | `SERVICE_UNAVAILABLE` | A dependency is down (readiness, Firebase)              |
 | 500    | `INTERNAL_ERROR`      | Anything unexpected; details are logged, never returned |
 
 Throw the typed errors from `src/http/errors.ts`. Anything else becomes a generic 500.
@@ -180,9 +188,58 @@ Health responses are not cached, not logged and not rate limited.
 
 ## Authentication and authorization
 
-Clients send `Authorization: Bearer <access token>`. Tokens are HS256 JWTs pinned to `JWT_ISSUER`, `JWT_AUDIENCE` and the `at+jwt` type, and must carry `sub`, `exp` and `iat`. Every verification failure returns the same 401.
+### Phone sign-in
 
-The token proves identity only. `authenticate` loads the user's role and status from the database on every request, so a role change or suspension takes effect immediately.
+Customers sign in with a phone OTP through Firebase Phone Authentication. Firebase sends and checks the code on the device. The API never sees the OTP. It verifies the resulting Firebase ID token and issues its own session tokens.
+
+```
+App                         Firebase              Sparrow API
+ | signInWithPhoneNumber  ->  |                       |
+ | confirm(code)          ->  |                       |
+ | getIdToken()           <-  |                       |
+ | POST /api/v1/auth/firebase { idToken } --------->  | verify, upsert user, open session
+ | <-------------------------------- { user, isNewUser, tokens }
+```
+
+The exchange accepts a token only when all of the following hold:
+
+| Check                                                       | Enforced by                                                    |
+| ----------------------------------------------------------- | -------------------------------------------------------------- |
+| Signature, issuer, audience, expiry                         | Admin SDK `verifyIdToken`                                      |
+| Not revoked, Firebase user not disabled                     | Admin SDK, with `checkRevoked`                                 |
+| `sign_in_provider` is `phone` and `phone_number` is present | API                                                            |
+| `auth_time` within `AUTH_FIREBASE_MAX_AUTH_AGE_SECONDS`     | API                                                            |
+| Number is a Nigerian mobile (`+234` 70, 80, 81, 90, 91)     | API, else 403 `PHONE_NOT_SUPPORTED`                            |
+| Sign-in not exchanged before                                | Unique `(firebase_uid, firebase_auth_time)` on `auth_sessions` |
+
+New users are created as `customer`. A role is never read from the client.
+
+### Endpoints
+
+All three are public and sit under `/api/v1/auth`. Token responses send `Cache-Control: no-store`.
+
+| Method and path       | Body               | Success                                                          | Failure                                                                                                                                      |
+| --------------------- | ------------------ | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /auth/firebase` | `{ idToken }`      | 200 `{ data: { user: { id, phone, role }, isNewUser, tokens } }` | 401 rejected, stale or already exchanged token; 403 `ACCOUNT_SUSPENDED` or `PHONE_NOT_SUPPORTED`; 503 Firebase unavailable or not configured |
+| `POST /auth/refresh`  | `{ refreshToken }` | 200 `{ data: { tokens } }` with a new pair                       | 401 for any invalid, expired, revoked or reused token; 403 `ACCOUNT_SUSPENDED`                                                               |
+| `POST /auth/logout`   | `{ refreshToken }` | 204, whether or not the token was valid                          | 400 for a malformed body only                                                                                                                |
+
+`tokens` is `{ tokenType: "Bearer", accessToken, accessTokenExpiresAt, refreshToken, refreshTokenExpiresAt }`, with ISO 8601 timestamps.
+
+### Sessions and tokens
+
+- **Access token.** An HS256 JWT pinned to `JWT_ISSUER`, `JWT_AUDIENCE` and the `at+jwt` type. It must carry `sub`, `sid` (the session id), `exp` and `iat`, and lives for `AUTH_ACCESS_TOKEN_TTL_SECONDS`.
+- **Refresh token.** `<session id>.<43 base64url characters>`. Only a SHA-256 hash of the random part is stored, in `auth_sessions`.
+- **Rotation.** Every refresh swaps the stored hash in one conditional update and returns a new pair. The old refresh token stops working.
+- **Reuse detection.** Presenting a superseded refresh token revokes the whole session (`refresh_reuse`) and logs a warning with the session and user ids.
+- **Expiry.** The refresh token expires after `AUTH_REFRESH_TOKEN_TTL_DAYS` without use. The session ends `AUTH_SESSION_MAX_AGE_DAYS` after sign-in, whatever the activity, and the user signs in with a new OTP.
+- **Logout.** Revokes the session that owns the refresh token.
+
+### Protecting routes
+
+Clients send `Authorization: Bearer <access token>`. Every verification failure returns the same 401.
+
+The token proves identity only. On every request, `authenticate` loads the user's role and status through the token's session in one query. A role change, suspension, logout or reuse revocation therefore takes effect on the next request.
 
 Protecting a route inside a module:
 
@@ -205,7 +262,43 @@ export const ridersModule: V1Module = {
 
 `requireRole` is a coarse role gate. Ownership checks, such as a customer reading only their own deliveries, belong in services. Mounting `requireRole` without `authenticate` fails closed with a 500.
 
-Token issuance is not exposed over HTTP yet; phone OTP login adds it.
+### Firebase configuration
+
+1. In the Firebase console, create a service account key (Project settings, Service accounts).
+2. Encode it on one line. Do not commit the JSON file; `*service-account*.json` and `firebase-adminsdk-*.json` are git-ignored.
+
+   ```powershell
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\to\key.json"))
+   ```
+
+3. Set the result as `FIREBASE_SERVICE_ACCOUNT_BASE64`.
+
+The variable is required in production; the server exits at startup without it. Outside production it is optional, and `POST /auth/firebase` returns 503 until it is set. The server also refuses to start when `FIREBASE_AUTH_EMULATOR_HOST` is set, because the Admin SDK skips signature checks in emulator mode.
+
+### Firebase console launch checklist
+
+Firebase, not this API, enforces the OTP itself: code expiry, single use, resend cooldown and per-number SMS limits. Before launch, confirm in the console:
+
+- [ ] Phone sign-in provider enabled.
+- [ ] SMS region policy set to allow Nigeria only.
+- [ ] App Check enforced for Authentication (Play Integrity on Android, App Attest or DeviceCheck on iOS).
+- [ ] SMS quota and abuse alerts reviewed.
+- [ ] Test phone numbers removed, or kept only in non-production projects.
+- [ ] Production service account stored only in the hosting platform's secret settings.
+
+### Frontend integration notes
+
+- **Development build.** `@react-native-firebase/app` and `@react-native-firebase/auth` need an Expo development build; Expo Go cannot run phone auth. `google-services.json` and `GoogleService-Info.plist` are client configuration, not secrets.
+- **Flow.**
+  1. `signInWithPhoneNumber('+234...')`.
+  2. `confirm(code)`.
+  3. `getIdToken()`.
+  4. `POST /api/v1/auth/firebase` with the ID token, within five minutes of step 2.
+  5. `signOut()` from Firebase. From here on, only Sparrow tokens are used.
+- **Storage.** Keep the refresh token in `expo-secure-store` and the access token in memory. Never use AsyncStorage for either.
+- **Refresh.** On a 401 from an API call, refresh once and retry. Allow only one refresh at a time: two parallel refreshes with the same token look like reuse, and the server revokes the session.
+- **Logout.** Call `POST /auth/logout` with the refresh token, then clear secure storage.
+- **Error codes to handle.** `PHONE_NOT_SUPPORTED`, `ACCOUNT_SUSPENDED`, `RATE_LIMITED` (honour `Retry-After`) and `SERVICE_UNAVAILABLE`.
 
 ### Development tokens
 
@@ -213,12 +306,21 @@ Token issuance is not exposed over HTTP yet; phone OTP login adds it.
 npm run token:dev -- --phone +2348012345678 --role admin
 ```
 
-The script creates the user or reuses it by phone, sets the requested role, and prints a one-hour token on stdout. It refuses to run unless `NODE_ENV` is `development` and `DATABASE_URL` points at localhost.
+The script creates the user or reuses it by phone, sets the requested role, and opens a session without Firebase. The phone accepts the same formats as sign-in (`+234...`, `234...` or `0...`). It prints one JSON line on stdout with the same shape as `tokens` above; the access token is valid for one hour. It refuses to run unless `NODE_ENV` is `development` and `DATABASE_URL` points at localhost.
+
+To try refresh and logout without a phone, capture the tokens and call the endpoints:
+
+```powershell
+$t = npm run --silent token:dev -- --phone 08012345678 --role customer | ConvertFrom-Json
+$body = @{ refreshToken = $t.refreshToken } | ConvertTo-Json
+Invoke-RestMethod -Method Post http://localhost:4000/api/v1/auth/refresh -ContentType 'application/json' -Body $body
+```
 
 ## Rate limiting and hardening
 
 - **Default limit.** Every `/api` route is limited to `RATE_LIMIT_MAX` requests per `RATE_LIMIT_WINDOW_MS` per client IP. Responses carry standard `RateLimit` and `RateLimit-Policy` headers.
 - **Sensitive routes.** Add a stricter limiter with `createRateLimiter({ windowMs, max, keyGenerator })`, keyed on something an attacker cannot rotate cheaply, such as phone number plus IP.
+- **Auth routes.** `POST /auth/firebase` has its own per-IP limit, and refresh and logout share another (see `AUTH_*_RATE_LIMIT_*`). The phone number is unknown until the ID token is verified, so per-number limits are left to Firebase. Nigerian carriers put many users behind one IP (CGNAT), so watch these limits after launch.
 - **Client IP behind a proxy.** Client IPs come from `req.ip`, which honours `TRUST_PROXY`. Set it to the exact number of proxies in front of the API. Too low makes all clients share one limit; too high lets clients spoof `X-Forwarded-For`.
 - **Single instance only.** The limiter store is in memory and is correct only for one instance. Running more than one needs a shared Redis store.
 - **Other hardening.**
