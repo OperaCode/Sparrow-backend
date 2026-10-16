@@ -7,11 +7,17 @@ export interface AuthSubject {
   status: AccountStatus;
 }
 
+export interface SignedInUser extends AuthSubject {
+  phone: string;
+  created: boolean;
+}
+
 export interface UsersRepository {
   findAuthSubject(
     userId: string,
     sessionId: string,
   ): Promise<AuthSubject | null>;
+  upsertCustomerByPhone(phone: string): Promise<SignedInUser>;
 }
 
 export function createUsersRepository(prisma: PrismaClient): UsersRepository {
@@ -33,6 +39,31 @@ export function createUsersRepository(prisma: PrismaClient): UsersRepository {
           AND s."absolute_expires_at" > now()
       `;
       return rows[0] ?? null;
+    },
+
+    /**
+     * Race-safe sign-up or sign-in in one statement. A new user is always a
+     * customer; an existing user keeps their role and status. xmax is 0 only
+     * for a freshly inserted row, which tells the two cases apart without a
+     * second query.
+     */
+    async upsertCustomerByPhone(phone) {
+      const rows = await prisma.$queryRaw<SignedInUser[]>`
+        INSERT INTO "users" ("phone", "role")
+        VALUES (${phone}, 'customer')
+        ON CONFLICT ("phone") DO UPDATE SET "updated_at" = now()
+        RETURNING
+          "id",
+          "phone",
+          "role"::text AS "role",
+          "status"::text AS "status",
+          (xmax = 0) AS "created"
+      `;
+      const user = rows[0];
+      if (user === undefined) {
+        throw new Error('User upsert returned no row');
+      }
+      return user;
     },
   };
 }

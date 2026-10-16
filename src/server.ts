@@ -5,11 +5,35 @@ import { ConfigError, loadConfig, type Config } from './config/env.js';
 import { applyServerTimeouts } from './http/server-timeouts.js';
 import { createLogger, type Logger } from './lib/logger.js';
 import { createPrismaClient, type PrismaClient } from './lib/prisma.js';
+import {
+  createFirebaseAuth,
+  createFirebaseVerifier,
+  createUnconfiguredFirebaseVerifier,
+  type FirebaseIdTokenVerifier,
+} from './modules/auth/firebase/firebase-verifier.js';
 import { createHealthRepository } from './modules/health/health.repository.js';
 import { createHealthService } from './modules/health/health.service.js';
 import { createUsersRepository } from './modules/users/users.repository.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
+
+/** Config validation already requires a service account in production. */
+function createFirebaseIdTokenVerifier(
+  config: Config,
+  logger: Logger,
+): FirebaseIdTokenVerifier {
+  if (config.firebase === null) {
+    logger.warn(
+      'Firebase is not configured; phone sign-in will return 503 until FIREBASE_SERVICE_ACCOUNT_BASE64 is set',
+    );
+    return createUnconfiguredFirebaseVerifier(logger);
+  }
+  return createFirebaseVerifier({
+    auth: createFirebaseAuth(config.firebase),
+    maxAuthAgeSeconds: config.session.maxFirebaseAuthAgeSeconds,
+    logger,
+  });
+}
 
 function loadConfigOrExit(): Config {
   try {
@@ -88,7 +112,12 @@ function main(): void {
     logger,
     healthService,
     authSubjects: createUsersRepository(prisma),
-    v1Modules: createV1Modules({ prisma, logger }),
+    v1Modules: createV1Modules({
+      prisma,
+      logger,
+      config,
+      firebaseVerifier: createFirebaseIdTokenVerifier(config, logger),
+    }),
   });
 
   const server = app.listen(config.port, (error) => {

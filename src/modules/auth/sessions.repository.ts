@@ -1,4 +1,5 @@
 import type { PrismaClient } from '../../lib/prisma.js';
+import type { AccountStatus } from '../../types/auth.js';
 
 export interface CreateSessionInput {
   userId: string;
@@ -23,8 +24,12 @@ export interface RotateSessionInput {
   refreshTtlSeconds: number;
 }
 
+export interface RotatedSession extends SessionExpiry {
+  userStatus: AccountStatus;
+}
+
 export type RotateSessionResult =
-  | { status: 'rotated'; session: SessionExpiry }
+  | { status: 'rotated'; session: RotatedSession }
   | { status: 'reused'; userId: string }
   | { status: 'invalid' };
 
@@ -39,13 +44,6 @@ export interface SessionsRepository {
   ): Promise<boolean>;
 }
 
-interface SessionRow {
-  id: string;
-  userId: string;
-  refreshExpiresAt: Date;
-  absoluteExpiresAt: Date;
-}
-
 /**
  * Timestamps come from the database clock, so every instance agrees on
  * expiry. Durations are whole seconds, cast so Postgres never guesses a type.
@@ -57,7 +55,7 @@ export function createSessionsRepository(
     async create(input) {
       // The refresh expiry is capped at the absolute expiry, as the
       // auth_sessions_expiry_order_check constraint requires.
-      const rows = await prisma.$queryRaw<SessionRow[]>`
+      const rows = await prisma.$queryRaw<SessionExpiry[]>`
         INSERT INTO "auth_sessions" (
           "user_id",
           "firebase_uid",
@@ -90,10 +88,11 @@ export function createSessionsRepository(
     /**
      * One compare-and-swap on the current hash, so two requests presenting
      * the same token cannot both rotate it. The sliding expiry never passes
-     * the absolute expiry.
+     * the absolute expiry. The owner's status comes back in the same round
+     * trip so a suspended user can be refused.
      */
     async rotate(input) {
-      const rotated = await prisma.$queryRaw<SessionRow[]>`
+      const rotated = await prisma.$queryRaw<RotatedSession[]>`
         UPDATE "auth_sessions"
         SET
           "refresh_token_hash" = ${input.nextHash},
@@ -111,7 +110,11 @@ export function createSessionsRepository(
           "id",
           "user_id" AS "userId",
           "refresh_expires_at" AS "refreshExpiresAt",
-          "absolute_expires_at" AS "absoluteExpiresAt"
+          "absolute_expires_at" AS "absoluteExpiresAt",
+          (
+            SELECT u."status"::text FROM "users" u
+            WHERE u."id" = "auth_sessions"."user_id"
+          ) AS "userStatus"
       `;
       const session = rotated[0];
       if (session !== undefined) return { status: 'rotated', session };

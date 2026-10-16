@@ -1,7 +1,14 @@
 import type { Config } from '../../config/env.js';
 import { signAccessToken } from './access-token.service.js';
-import { formatRefreshToken, generateRefreshSecret } from './refresh-token.js';
-import type { SessionsRepository } from './sessions.repository.js';
+import {
+  formatRefreshToken,
+  generateRefreshSecret,
+  type ParsedRefreshToken,
+} from './refresh-token.js';
+import type {
+  SessionExpiry,
+  SessionsRepository,
+} from './sessions.repository.js';
 
 const DAY_SECONDS = 24 * 60 * 60;
 
@@ -21,9 +28,16 @@ export interface OpenSessionInput {
   accessTokenTtlSeconds?: number;
 }
 
+export type RotateTokensResult =
+  | { status: 'rotated'; tokens: IssuedTokens }
+  | { status: 'suspended'; userId: string }
+  | { status: 'reused'; userId: string }
+  | { status: 'invalid' };
+
 export interface SessionTokens {
   /** Returns null when this Firebase sign-in already opened a session. */
   open(input: OpenSessionInput): Promise<IssuedTokens | null>;
+  rotate(token: ParsedRefreshToken): Promise<RotateTokensResult>;
 }
 
 interface SessionTokensDependencies {
@@ -35,6 +49,26 @@ export function createSessionTokens(
   deps: SessionTokensDependencies,
 ): SessionTokens {
   const { auth, session } = deps.config;
+  const refreshTtlSeconds = session.refreshTokenTtlDays * DAY_SECONDS;
+
+  async function issue(
+    created: SessionExpiry,
+    refreshSecret: string,
+    accessTokenTtlSeconds: number,
+  ): Promise<IssuedTokens> {
+    const access = await signAccessToken(
+      auth,
+      { userId: created.userId, sessionId: created.id },
+      accessTokenTtlSeconds,
+    );
+    return {
+      tokenType: 'Bearer',
+      accessToken: access.token,
+      accessTokenExpiresAt: access.expiresAt,
+      refreshToken: formatRefreshToken(created.id, refreshSecret),
+      refreshTokenExpiresAt: created.refreshExpiresAt,
+    };
+  }
 
   return {
     async open(input) {
@@ -44,22 +78,41 @@ export function createSessionTokens(
         firebaseUid: input.firebaseUid,
         firebaseAuthTime: input.firebaseAuthTime,
         refreshTokenHash: refresh.hash,
-        refreshTtlSeconds: session.refreshTokenTtlDays * DAY_SECONDS,
+        refreshTtlSeconds,
         maxAgeSeconds: session.maxAgeDays * DAY_SECONDS,
       });
       if (created === null) return null;
-
-      const access = await signAccessToken(
-        auth,
-        { userId: created.userId, sessionId: created.id },
+      return issue(
+        created,
+        refresh.secret,
         input.accessTokenTtlSeconds ?? session.accessTokenTtlSeconds,
       );
+    },
+
+    /**
+     * A suspended user's token is still consumed by the rotation, so the
+     * session cannot be refreshed again after a reinstatement; the user signs
+     * in with a new OTP instead.
+     */
+    async rotate(token) {
+      const next = generateRefreshSecret();
+      const result = await deps.sessions.rotate({
+        sessionId: token.sessionId,
+        presentedHash: token.hash,
+        nextHash: next.hash,
+        refreshTtlSeconds,
+      });
+      if (result.status !== 'rotated') return result;
+      if (result.session.userStatus !== 'active') {
+        return { status: 'suspended', userId: result.session.userId };
+      }
       return {
-        tokenType: 'Bearer',
-        accessToken: access.token,
-        accessTokenExpiresAt: access.expiresAt,
-        refreshToken: formatRefreshToken(created.id, refresh.secret),
-        refreshTokenExpiresAt: created.refreshExpiresAt,
+        status: 'rotated',
+        tokens: await issue(
+          result.session,
+          next.secret,
+          session.accessTokenTtlSeconds,
+        ),
       };
     },
   };
