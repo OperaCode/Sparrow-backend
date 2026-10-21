@@ -4,18 +4,21 @@ import { UnauthorizedError } from '../../http/errors.js';
 import { sendData } from '../../http/response.js';
 import type { AuthContext } from '../../types/auth.js';
 import type {
+  areaBodySchema,
+  areaParamsSchema,
   manualQuoteBodySchema,
   orderParamsSchema,
   ruleParamsSchema,
   updateRuleBodySchema,
 } from './pricing.schema.js';
 import type { PricingService } from './pricing.service.js';
-import { CURRENCY, type QuoteInput } from './pricing.types.js';
+import { CURRENCY, type QuoteRequest } from './pricing.types.js';
 
 export interface PricingController {
   quote: RequestHandler;
   createOrder: RequestHandler;
   updateRule: RequestHandler;
+  updateArea: RequestHandler;
   applyManualQuote: RequestHandler;
 }
 
@@ -34,27 +37,36 @@ export function createPricingController(
 ): PricingController {
   return {
     quote: async (req, res) => {
-      sendData(res, await service.quote(bodyOf(req) as QuoteInput));
+      sendData(res, await service.quote(bodyOf(req) as QuoteRequest));
     },
 
     createOrder: async (req, res) => {
       const { userId } = requireAuth(req);
       const order = await service.createOrder(
         userId,
-        bodyOf(req) as QuoteInput,
+        bodyOf(req) as QuoteRequest,
       );
       sendData(res, order, { status: 201 });
     },
 
     updateRule: async (req, res) => {
+      const { userId } = requireAuth(req);
       const params = req.params as z.output<typeof ruleParamsSchema>;
       const patch = bodyOf(req) as z.output<typeof updateRuleBodySchema>;
       const rule = await service.updateRule(
         params.component,
         params.tier,
         patch,
+        userId,
       );
       sendData(res, { ...rule, currency: CURRENCY });
+    },
+
+    updateArea: async (req, res) => {
+      const params = req.params as z.output<typeof areaParamsSchema>;
+      const box = bodyOf(req) as z.output<typeof areaBodySchema>;
+      const area = await service.updateArea(params.place, box);
+      sendData(res, area);
     },
 
     applyManualQuote: async (req, res) => {
@@ -63,7 +75,7 @@ export function createPricingController(
       const body = bodyOf(req) as z.output<typeof manualQuoteBodySchema>;
       const order = await service.applyManualQuote(
         params.id,
-        body.amountNaira,
+        body.amountKobo,
         userId,
       );
       sendData(res, order);

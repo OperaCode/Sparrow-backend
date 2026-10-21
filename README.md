@@ -117,7 +117,12 @@ Client endpoints live under `/api/v1`. Additive changes stay in v1. A breaking c
 A feature module registers itself in `src/api/v1/modules.ts`:
 
 ```ts
-export const v1Modules: readonly V1Module[] = [deliveriesModule];
+export function createV1Modules(deps: {
+  prisma: PrismaClient;
+  logger: Logger;
+}): readonly V1Module[] {
+  return createPricingModules(deps);
+}
 ```
 
 ### Response envelope
