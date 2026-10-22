@@ -1,6 +1,6 @@
 import type { RequestHandler } from 'express';
 import type { AccountStatus, Role } from '../../types/auth.js';
-import { ForbiddenError, UnauthorizedError } from '../errors.js';
+import { checkAccountStatus, UnauthorizedError } from '../errors.js';
 
 export interface TokenVerifier {
   verify(token: string): Promise<{ userId: string }>;
@@ -31,7 +31,7 @@ function extractBearerToken(header: string | undefined): string {
 /**
  * Verifies the bearer token, then loads role and status from the database on
  * every request. The token only proves identity; it never carries authority,
- * so demotions and suspensions take effect immediately.
+ * so demotions, suspensions, and deactivations take effect immediately.
  */
 export function createAuthenticate(
   deps: AuthenticateDependencies,
@@ -44,12 +44,7 @@ export function createAuthenticate(
     if (subject === null) {
       throw new UnauthorizedError();
     }
-    if (subject.status !== 'active') {
-      throw new ForbiddenError(
-        'This account is suspended',
-        'ACCOUNT_SUSPENDED',
-      );
-    }
+    checkAccountStatus(subject.status);
 
     req.auth = { userId: subject.id, role: subject.role };
     next();

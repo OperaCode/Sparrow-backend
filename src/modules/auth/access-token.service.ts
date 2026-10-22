@@ -56,8 +56,10 @@ export function createAccessTokenVerifier(
 }
 
 /**
- * Issues an access token. Used by the development token script now and by
- * the OTP login flow later; no HTTP endpoint issues tokens yet.
+ * Issues an access token for a user id that already exists. The development
+ * token script signs tokens today. Phone OTP will call
+ * UsersService.openVerifiedCustomer after the code checks out, then sign.
+ * No HTTP endpoint issues tokens yet.
  */
 export async function signAccessToken(
   config: AuthConfig,

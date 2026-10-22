@@ -78,6 +78,15 @@ describe('authenticate', () => {
     expect(errorOf(response).code).toBe('ACCOUNT_SUSPENDED');
   });
 
+  it('returns 403 ACCOUNT_DEACTIVATED for a deactivated user', async () => {
+    const response = await request(appWith('customer', 'deactivated'))
+      .get('/api/v1/test-protected/any')
+      .set('Authorization', `Bearer ${await tokenFor(USER_ID)}`)
+      .expect(403);
+
+    expect(errorOf(response).code).toBe('ACCOUNT_DEACTIVATED');
+  });
+
   it('accepts a lowercase bearer scheme', async () => {
     await request(appWith('customer'))
       .get('/api/v1/test-protected/any')

@@ -156,6 +156,7 @@ Error:
 | 401    | `UNAUTHENTICATED`     | Missing, invalid or expired token, or unknown user      |
 | 403    | `FORBIDDEN`           | Authenticated but not allowed                           |
 | 403    | `ACCOUNT_SUSPENDED`   | User is suspended                                       |
+| 403    | `ACCOUNT_DEACTIVATED` | User is deactivated                                     |
 | 404    | `NOT_FOUND`           | Unknown route or resource                               |
 | 409    | `CONFLICT`            | Uniqueness or state conflict                            |
 | 413    | `PAYLOAD_TOO_LARGE`   | JSON body over 100 kB                                   |
@@ -182,7 +183,7 @@ Health responses are not cached, not logged and not rate limited.
 
 Clients send `Authorization: Bearer <access token>`. Tokens are HS256 JWTs pinned to `JWT_ISSUER`, `JWT_AUDIENCE` and the `at+jwt` type, and must carry `sub`, `exp` and `iat`. Every verification failure returns the same 401.
 
-The token proves identity only. `authenticate` loads the user's role and status from the database on every request, so a role change or suspension takes effect immediately.
+The token proves identity only. `authenticate` loads the user's role and status from the database on every request, so a role change, suspension, or deactivation takes effect immediately. A suspended account returns 403 `ACCOUNT_SUSPENDED`. A deactivated account returns 403 `ACCOUNT_DEACTIVATED`.
 
 Protecting a route inside a module:
 
@@ -205,7 +206,17 @@ export const ridersModule: V1Module = {
 
 `requireRole` is a coarse role gate. Ownership checks, such as a customer reading only their own deliveries, belong in services. Mounting `requireRole` without `authenticate` fails closed with a 500.
 
-Token issuance is not exposed over HTTP yet; phone OTP login adds it.
+### Accounts
+
+A verified phone opens a customer through `UsersService.openVerifiedCustomer`. The first call stores the phone with role `customer`, account type `standard`, and no name or community. A later call returns that row and does not change its role. The call is not an HTTP route: phone OTP must make it only after the code checks out, then sign an access token. Token issuance is not exposed over HTTP yet.
+
+`GET /api/v1/me` restores the profile for the token's user id. A user id in the query is ignored. `PATCH /api/v1/me` sets `name`, `community` (`igbesa`, `lusada`, or `ketu`), and `accountType` (`standard` or `business`). A body that includes `role`, `phone`, `status`, or any other field is rejected.
+
+`POST /api/v1/me/deactivation` with `{}` deactivates the signed-in customer or rider. The next request with that token returns 403 `ACCOUNT_DEACTIVATED`. An admin cannot deactivate their own login on this route.
+
+Admins are not self-serve. `POST /api/v1/users` requires an active admin and creates a `customer` or `admin` for a phone that has no account yet. It does not issue a token, and it does not accept `rider`. An existing phone is a conflict, not a role change. `PATCH /api/v1/users/:id/role` and `PATCH /api/v1/users/:id/status` change someone else's role (`customer` or `admin`) or status (`active`, `suspended`, or `deactivated`). An admin cannot use them on their own id. The local `token:dev` script remains the way to create the first admin.
+
+There is no list of accounts. Identity for the signed-in user always comes from the token.
 
 ### Development tokens
 
@@ -213,7 +224,7 @@ Token issuance is not exposed over HTTP yet; phone OTP login adds it.
 npm run token:dev -- --phone +2348012345678 --role admin
 ```
 
-The script creates the user or reuses it by phone, sets the requested role, and prints a one-hour token on stdout. It refuses to run unless `NODE_ENV` is `development` and `DATABASE_URL` points at localhost.
+The script creates the user or reuses it by phone, sets the requested role, and prints a one-hour token on stdout. Reusing a phone does not change that person's name, community, or account type. It refuses to run unless `NODE_ENV` is `development` and `DATABASE_URL` points at localhost. A token for a suspended or deactivated user is printed with a warning and will be rejected.
 
 ## Rate limiting and hardening
 

@@ -19,19 +19,41 @@ enum UserRole {
 enum UserStatus {
   active
   suspended
+  deactivated
 
   @@map("user_status")
 }
 
-/// Phone format (E.164) is also enforced by a CHECK constraint in the
-/// migration, which Prisma cannot express in the schema.
+enum AccountType {
+  standard
+  business
+
+  @@map("user_account_type")
+}
+
+/// A community the customer lives in. Extended and outside-area places are
+/// delivery zones, not account communities.
+enum Community {
+  igbesa
+  lusada
+  ketu
+
+  @@map("user_community")
+}
+
+/// Phone format (E.164) and trimmed names are also enforced by CHECK
+/// constraints in the migrations, which Prisma cannot express in the schema.
+/// Role and status are server-owned.
 model User {
-  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  phone     String     @unique @db.VarChar(16)
-  role      UserRole   @default(customer)
-  status    UserStatus @default(active)
-  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id          String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  phone       String      @unique @db.VarChar(16)
+  name        String?     @db.VarChar(80)
+  community   Community?
+  accountType AccountType @default(standard) @map("account_type")
+  role        UserRole    @default(customer)
+  status      UserStatus  @default(active)
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   orders Order[] @relation("OrderCustomer")
   quotes Order[] @relation("OrderQuotedBy")

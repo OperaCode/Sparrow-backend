@@ -1,3 +1,5 @@
+import type { AccountStatus } from '../types/auth.js';
+
 export type ErrorCode =
   | 'VALIDATION_ERROR'
   | 'INVALID_JSON'
@@ -5,6 +7,7 @@ export type ErrorCode =
   | 'UNAUTHENTICATED'
   | 'FORBIDDEN'
   | 'ACCOUNT_SUSPENDED'
+  | 'ACCOUNT_DEACTIVATED'
   | 'NOT_FOUND'
   | 'CONFLICT'
   | 'PAYLOAD_TOO_LARGE'
@@ -70,6 +73,39 @@ export class ForbiddenError extends AppError {
     code: ErrorCode = 'FORBIDDEN',
   ) {
     super(403, code, message);
+  }
+}
+
+const INACTIVE_ACCOUNT = new Map<
+  string,
+  { readonly message: string; readonly code: ErrorCode }
+>(
+  Object.entries({
+    suspended: {
+      message: 'This account is suspended',
+      code: 'ACCOUNT_SUSPENDED',
+    },
+    deactivated: {
+      message: 'This account is deactivated',
+      code: 'ACCOUNT_DEACTIVATED',
+    },
+  } as const satisfies Record<
+    Exclude<AccountStatus, 'active'>,
+    { readonly message: string; readonly code: ErrorCode }
+  >),
+);
+
+/**
+ * Active accounts continue. Every other known status is rejected with its own
+ * code, so a deactivation is not reported as a suspension.
+ */
+export function checkAccountStatus(status: AccountStatus): void {
+  const refusal = INACTIVE_ACCOUNT.get(status);
+  if (refusal !== undefined) {
+    throw new ForbiddenError(refusal.message, refusal.code);
+  }
+  if (status !== 'active') {
+    throw new Error(`Unhandled account status ${JSON.stringify(status)}`);
   }
 }
 
