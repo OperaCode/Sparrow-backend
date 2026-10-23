@@ -16,6 +16,7 @@ import { createTestPrisma, truncateAllTables } from '../../helpers/database.js';
 import { FakeFirebaseAuth, fakeIdToken } from '../../helpers/firebase.js';
 import { errorOf } from '../../helpers/http.js';
 import { createLogCapture } from '../../helpers/log-capture.js';
+import { unknownRefreshToken } from '../../helpers/refresh-token.js';
 
 const prisma = createTestPrisma();
 
@@ -421,10 +422,7 @@ describe('POST /api/v1/auth/refresh', () => {
   it('returns 401 for a well-formed token that matches no session', async () => {
     const auth = authApp();
 
-    const response = await refresh(
-      auth.app,
-      `3f0e0c9a-6b1e-4c43-9a51-2c4b0f6d8a11.${'a'.repeat(43)}`,
-    ).expect(401);
+    const response = await refresh(auth.app, unknownRefreshToken()).expect(401);
 
     expect(errorOf(response).code).toBe('UNAUTHENTICATED');
   });
@@ -459,7 +457,7 @@ describe('POST /api/v1/auth/refresh', () => {
     [
       'an extra field',
       {
-        refreshToken: `3f0e0c9a-6b1e-4c43-9a51-2c4b0f6d8a11.${'a'.repeat(43)}`,
+        refreshToken: unknownRefreshToken(),
         userId: 'x',
       },
     ],
@@ -482,7 +480,7 @@ describe('POST /api/v1/auth/refresh', () => {
         AUTH_REFRESH_RATE_LIMIT_WINDOW_MS: '60000',
       },
     });
-    const unknown = `3f0e0c9a-6b1e-4c43-9a51-2c4b0f6d8a11.${'a'.repeat(43)}`;
+    const unknown = unknownRefreshToken();
 
     await refresh(auth.app, unknown).expect(401);
     await logout(auth.app, unknown).expect(204);
@@ -513,10 +511,7 @@ describe('POST /api/v1/auth/logout', () => {
     await logout(auth.app, tokens.refreshToken).expect(204);
 
     await logout(auth.app, tokens.refreshToken).expect(204);
-    await logout(
-      auth.app,
-      `3f0e0c9a-6b1e-4c43-9a51-2c4b0f6d8a11.${'a'.repeat(43)}`,
-    ).expect(204);
+    await logout(auth.app, unknownRefreshToken()).expect(204);
   });
 
   it('returns 400 only for a malformed body', async () => {

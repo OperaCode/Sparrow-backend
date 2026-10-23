@@ -5,6 +5,7 @@ import {
   type CreateSessionInput,
 } from '../../../src/modules/auth/sessions.repository.js';
 import { createTestPrisma, truncateAllTables } from '../../helpers/database.js';
+import { unknownSessionId } from '../../helpers/refresh-token.js';
 
 const prisma = createTestPrisma();
 const repository = createSessionsRepository(prisma);
@@ -22,7 +23,6 @@ const DAY_MS = DAY_SECONDS * 1000;
 const REFRESH_TTL_SECONDS = 30 * DAY_SECONDS;
 const MAX_AGE_SECONDS = 90 * DAY_SECONDS;
 const GRACE_SECONDS = 30;
-const UNKNOWN_SESSION_ID = '3f0e0c9a-6b1e-4c43-9a51-2c4b0f6d8a11';
 
 async function databaseNow(): Promise<number> {
   const rows = await prisma.$queryRaw<{ now: Date }[]>`SELECT now() AS "now"`;
@@ -312,7 +312,7 @@ describe('sessions repository: rotate', () => {
 
   it('rejects an unknown session id', async () => {
     const result = await rotate(
-      UNKNOWN_SESSION_ID,
+      unknownSessionId(),
       generateRefreshSecret().hash,
     );
 
@@ -360,7 +360,7 @@ describe('sessions repository: logout', () => {
   it('reports false for an unknown session id', async () => {
     await expect(
       repository.revokeForLogout(
-        UNKNOWN_SESSION_ID,
+        unknownSessionId(),
         generateRefreshSecret().hash,
       ),
     ).resolves.toBe(false);
