@@ -9,11 +9,17 @@ import {
 } from './http/middleware/authenticate.js';
 import { createErrorHandler } from './http/middleware/error-handler.js';
 import { createHttpLogger } from './http/middleware/http-logger.js';
+import {
+  createIdempotency,
+  IDEMPOTENCY_KEY_HEADER,
+  IDEMPOTENCY_REPLAYED_HEADER,
+} from './http/middleware/idempotency.js';
 import { notFound } from './http/middleware/not-found.js';
 import { createRateLimiter } from './http/middleware/rate-limit.js';
 import { REQUEST_ID_HEADER, requestId } from './http/middleware/request-id.js';
 import { requireRole } from './http/middleware/require-role.js';
 import type { Logger } from './lib/logger.js';
+import type { IdempotencyStore } from './types/idempotency.js';
 import { createAccessTokenVerifier } from './modules/auth/access-token.service.js';
 import { createHealthController } from './modules/health/health.controller.js';
 import { createHealthRouter } from './modules/health/health.routes.js';
@@ -24,6 +30,7 @@ export interface AppDependencies {
   logger: Logger;
   healthService: HealthService;
   authSubjects: AuthSubjectLookup;
+  idempotency: IdempotencyStore;
   v1Modules: readonly V1Module[];
 }
 
@@ -39,9 +46,15 @@ function createCors(origins: readonly string[]): RequestHandler {
   return cors({
     origin: origins.length > 0 ? [...origins] : false,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-    allowedHeaders: ['Authorization', 'Content-Type', REQUEST_ID_HEADER],
+    allowedHeaders: [
+      'Authorization',
+      'Content-Type',
+      REQUEST_ID_HEADER,
+      IDEMPOTENCY_KEY_HEADER,
+    ],
     exposedHeaders: [
       REQUEST_ID_HEADER,
+      IDEMPOTENCY_REPLAYED_HEADER,
       'RateLimit',
       'RateLimit-Policy',
       'Retry-After',
@@ -86,7 +99,11 @@ export function createApp(deps: AppDependencies): Express {
   });
   app.use(
     '/api/v1',
-    createV1Router(deps.v1Modules, { authenticate, requireRole }),
+    createV1Router(deps.v1Modules, {
+      authenticate,
+      requireRole,
+      idempotency: createIdempotency(deps.idempotency),
+    }),
   );
 
   app.use(notFound);

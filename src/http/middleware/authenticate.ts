@@ -1,6 +1,7 @@
-import type { RequestHandler } from 'express';
-import type { AccountStatus, Role } from '../../types/auth.js';
-import { ForbiddenError, UnauthorizedError } from '../errors.js';
+import type { Request, RequestHandler } from 'express';
+import type { AccountStatus, AuditActor, Role } from '../../types/auth.js';
+import { checkAccountStatus, UnauthorizedError } from '../errors.js';
+import { getRequestId } from './request-id.js';
 
 export interface TokenVerifier {
   verify(token: string): Promise<{ userId: string; sessionId: string }>;
@@ -33,8 +34,8 @@ function extractBearerToken(header: string | undefined): string {
 /**
  * Verifies the bearer token, then loads role and status from the database on
  * every request, through the token's session. The token only proves identity;
- * it never carries authority, so demotions, suspensions and logouts take
- * effect immediately.
+ * it never carries authority, so demotions, suspensions, deactivations, and
+ * logouts take effect immediately.
  */
 export function createAuthenticate(
   deps: AuthenticateDependencies,
@@ -47,14 +48,15 @@ export function createAuthenticate(
     if (subject === null) {
       throw new UnauthorizedError();
     }
-    if (subject.status !== 'active') {
-      throw new ForbiddenError(
-        'This account is suspended',
-        'ACCOUNT_SUSPENDED',
-      );
-    }
+    checkAccountStatus(subject.status);
 
     req.auth = { userId: subject.id, role: subject.role };
     next();
   };
+}
+
+/** Identity plus the request id stored on a privileged audit row. */
+export function auditActor(req: Request): AuditActor {
+  if (req.auth === undefined) throw new UnauthorizedError();
+  return { actorId: req.auth.userId, requestId: getRequestId(req) };
 }

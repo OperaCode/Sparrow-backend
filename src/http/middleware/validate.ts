@@ -38,6 +38,11 @@ export function validate(schemas: RequestSchemas): RequestHandler {
     }
 
     if (details.length > 0) {
+      details.sort((left, right) => {
+        const byPath = left.path.localeCompare(right.path);
+        if (byPath !== 0) return byPath;
+        return left.message.localeCompare(right.message);
+      });
       next(new ValidationError(details));
       return;
     }

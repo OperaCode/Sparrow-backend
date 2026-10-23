@@ -13,6 +13,7 @@ import {
 } from './modules/auth/firebase/firebase-verifier.js';
 import { createHealthRepository } from './modules/health/health.repository.js';
 import { createHealthService } from './modules/health/health.service.js';
+import { createIdempotencyRepository } from './modules/idempotency/idempotency.repository.js';
 import { createUsersRepository } from './modules/users/users.repository.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -112,6 +113,7 @@ function main(): void {
     logger,
     healthService,
     authSubjects: createUsersRepository(prisma),
+    idempotency: createIdempotencyRepository(prisma),
     v1Modules: createV1Modules({
       prisma,
       logger,

@@ -1,4 +1,4 @@
-import { ForbiddenError, UnauthorizedError } from '../../http/errors.js';
+import { checkAccountStatus, UnauthorizedError } from '../../http/errors.js';
 import type { Logger } from '../../lib/logger.js';
 import type { Role } from '../../types/auth.js';
 import type { UsersRepository } from '../users/users.repository.js';
@@ -27,10 +27,6 @@ interface AuthServiceDependencies {
   logger: Logger;
 }
 
-function suspended(): ForbiddenError {
-  return new ForbiddenError('This account is suspended', 'ACCOUNT_SUSPENDED');
-}
-
 export function createAuthService(deps: AuthServiceDependencies): AuthService {
   const { logger } = deps;
 
@@ -38,7 +34,7 @@ export function createAuthService(deps: AuthServiceDependencies): AuthService {
     async exchangeFirebaseToken(idToken) {
       const identity = await deps.firebase.verify(idToken);
       const user = await deps.users.upsertCustomerByPhone(identity.phone);
-      if (user.status !== 'active') throw suspended();
+      checkAccountStatus(user.status);
 
       const tokens = await deps.sessionTokens.open({
         userId: user.id,
@@ -67,8 +63,9 @@ export function createAuthService(deps: AuthServiceDependencies): AuthService {
       switch (result.status) {
         case 'rotated':
           return result.tokens;
-        case 'suspended':
-          throw suspended();
+        case 'inactive':
+          checkAccountStatus(result.userStatus);
+          throw new Error('Inactive account was not rejected');
         case 'reused':
           logger.warn(
             { sessionId: parsed.sessionId, userId: result.userId },

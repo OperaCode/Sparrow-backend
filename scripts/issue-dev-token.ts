@@ -1,11 +1,11 @@
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
-import { ConfigError, loadConfig, type Config } from '../src/config/env.js';
-import { createPrismaClient } from '../src/lib/prisma.js';
-import { normaliseNigerianMobile } from '../src/modules/auth/phone.js';
-import { createSessionTokens } from '../src/modules/auth/session-tokens.js';
-import { createSessionsRepository } from '../src/modules/auth/sessions.repository.js';
-import { ROLES } from '../src/types/auth.js';
+import { ConfigError, loadConfig, type Config } from '#src/config/env.js';
+import { createPrismaClient } from '#src/lib/prisma.js';
+import { normaliseNigerianMobile } from '#src/modules/auth/phone.js';
+import { createSessionTokens } from '#src/modules/auth/session-tokens.js';
+import { createSessionsRepository } from '#src/modules/auth/sessions.repository.js';
+import { ROLES } from '#src/types/auth.js';
 
 const USAGE =
   'Usage: npm run token:dev -- --phone +2348012345678 --role customer|rider|admin';
@@ -76,8 +76,9 @@ async function main(): Promise<void> {
   assertLocalDevelopment(config);
   const args = parseCliArgs();
 
-  // Writes the user through Prisma directly: application code never assigns
-  // a role, and this script has to.
+  // Local bootstrap for the first admin. It may set a role because it only
+  // runs in development against localhost. Application code creates customers
+  // through phone sign-in, and creates further admins through POST /api/v1/users.
   const prisma = createPrismaClient(config.databaseUrl);
   try {
     const user = await prisma.user.upsert({
@@ -106,7 +107,7 @@ async function main(): Promise<void> {
     );
     if (user.status !== 'active') {
       process.stderr.write(
-        'Warning: this user is suspended, so the tokens will be rejected.\n',
+        `Warning: this user is ${user.status}, so the tokens will be rejected.\n`,
       );
     }
     // Only the tokens go to stdout, as one JSON line a shell can capture.

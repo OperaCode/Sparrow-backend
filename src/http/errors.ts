@@ -1,3 +1,5 @@
+import type { AccountStatus } from '../types/auth.js';
+
 export type ErrorCode =
   | 'VALIDATION_ERROR'
   | 'INVALID_JSON'
@@ -5,9 +7,12 @@ export type ErrorCode =
   | 'UNAUTHENTICATED'
   | 'FORBIDDEN'
   | 'ACCOUNT_SUSPENDED'
+  | 'ACCOUNT_DEACTIVATED'
   | 'PHONE_NOT_SUPPORTED'
   | 'NOT_FOUND'
   | 'CONFLICT'
+  | 'IDEMPOTENCY_CONFLICT'
+  | 'IDEMPOTENCY_IN_PROGRESS'
   | 'PAYLOAD_TOO_LARGE'
   | 'RATE_LIMITED'
   | 'SERVICE_UNAVAILABLE'
@@ -74,15 +79,56 @@ export class ForbiddenError extends AppError {
   }
 }
 
+const INACTIVE_ACCOUNT = new Map<
+  string,
+  { readonly message: string; readonly code: ErrorCode }
+>(
+  Object.entries({
+    suspended: {
+      message: 'This account is suspended',
+      code: 'ACCOUNT_SUSPENDED',
+    },
+    deactivated: {
+      message: 'This account is deactivated',
+      code: 'ACCOUNT_DEACTIVATED',
+    },
+  } as const satisfies Record<
+    Exclude<AccountStatus, 'active'>,
+    { readonly message: string; readonly code: ErrorCode }
+  >),
+);
+
+/**
+ * Active accounts continue. Every other known status is rejected with its own
+ * code, so a deactivation is not reported as a suspension.
+ */
+export function checkAccountStatus(status: AccountStatus): void {
+  const refusal = INACTIVE_ACCOUNT.get(status);
+  if (refusal !== undefined) {
+    throw new ForbiddenError(refusal.message, refusal.code);
+  }
+  if (status !== 'active') {
+    throw new Error(`Unhandled account status ${JSON.stringify(status)}`);
+  }
+}
+
 export class NotFoundError extends AppError {
   constructor(message = 'Resource not found') {
     super(404, 'NOT_FOUND', message);
   }
 }
 
+type ConflictCode = Extract<
+  ErrorCode,
+  'CONFLICT' | 'IDEMPOTENCY_CONFLICT' | 'IDEMPOTENCY_IN_PROGRESS'
+>;
+
 export class ConflictError extends AppError {
-  constructor(message = 'Resource already exists') {
-    super(409, 'CONFLICT', message);
+  constructor(
+    message = 'Resource already exists',
+    code: ConflictCode = 'CONFLICT',
+  ) {
+    super(409, code, message);
   }
 }
 

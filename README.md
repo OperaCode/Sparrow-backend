@@ -125,7 +125,12 @@ Client endpoints live under `/api/v1`. Additive changes stay in v1. A breaking c
 A feature module registers itself in `src/api/v1/modules.ts`:
 
 ```ts
-export const v1Modules: readonly V1Module[] = [deliveriesModule];
+export function createV1Modules(deps: {
+  prisma: PrismaClient;
+  logger: Logger;
+}): readonly V1Module[] {
+  return createPricingModules(deps);
+}
 ```
 
 ### Response envelope
@@ -139,7 +144,7 @@ Success:
 }
 ```
 
-`meta` is present only when there is something to put in it. Use `sendData(res, data, { status, meta })`.
+`meta` is present only when there is something to put in it. A list always sends `meta` as `{ "limit", "nextCursor" }`, and `nextCursor` is `null` on the last page. Use `sendData(res, data, { status, meta })`.
 
 Error:
 
@@ -156,27 +161,63 @@ Error:
 
 `details` appears on validation errors only. Every response carries an `X-Request-Id` header that matches the `requestId` in logs and error bodies.
 
-| Status | Code                  | When                                                    |
-| ------ | --------------------- | ------------------------------------------------------- |
-| 400    | `VALIDATION_ERROR`    | Params, query or body failed schema validation          |
-| 400    | `INVALID_JSON`        | Malformed JSON body                                     |
-| 400    | `BAD_REQUEST`         | Other malformed requests                                |
-| 401    | `UNAUTHENTICATED`     | Missing, invalid or expired token, or revoked session   |
-| 403    | `FORBIDDEN`           | Authenticated but not allowed                           |
-| 403    | `ACCOUNT_SUSPENDED`   | User is suspended                                       |
-| 403    | `PHONE_NOT_SUPPORTED` | Sign-in with a number that is not a Nigerian mobile     |
-| 404    | `NOT_FOUND`           | Unknown route or resource                               |
-| 409    | `CONFLICT`            | Uniqueness or state conflict                            |
-| 413    | `PAYLOAD_TOO_LARGE`   | JSON body over 100 kB                                   |
-| 429    | `RATE_LIMITED`        | Rate limit exceeded; see `Retry-After`                  |
-| 503    | `SERVICE_UNAVAILABLE` | A dependency is down (readiness, Firebase)              |
-| 500    | `INTERNAL_ERROR`      | Anything unexpected; details are logged, never returned |
+| Status | Code                      | When                                                    |
+| ------ | ------------------------- | ------------------------------------------------------- |
+| 400    | `VALIDATION_ERROR`        | Params, query or body failed schema validation          |
+| 400    | `INVALID_JSON`            | Malformed JSON body                                     |
+| 400    | `BAD_REQUEST`             | Other malformed requests                                |
+| 401    | `UNAUTHENTICATED`         | Missing, invalid or expired token, or revoked session   |
+| 403    | `FORBIDDEN`               | Authenticated but not allowed                           |
+| 403    | `ACCOUNT_SUSPENDED`       | User is suspended                                       |
+| 403    | `ACCOUNT_DEACTIVATED`     | User is deactivated                                     |
+| 403    | `PHONE_NOT_SUPPORTED`     | Sign-in with a number that is not a Nigerian mobile     |
+| 404    | `NOT_FOUND`               | Unknown route or resource                               |
+| 409    | `CONFLICT`                | Uniqueness or state conflict                            |
+| 409    | `IDEMPOTENCY_CONFLICT`    | Same idempotency key, different request                 |
+| 409    | `IDEMPOTENCY_IN_PROGRESS` | That key has no finished result and is not taken over   |
+| 413    | `PAYLOAD_TOO_LARGE`       | JSON body over 100 kB                                   |
+| 429    | `RATE_LIMITED`            | Rate limit exceeded; see `Retry-After`                  |
+| 503    | `SERVICE_UNAVAILABLE`     | A dependency is down (readiness, Firebase)              |
+| 500    | `INTERNAL_ERROR`          | Anything unexpected; details are logged, never returned |
 
 Throw the typed errors from `src/http/errors.ts`. Anything else becomes a generic 500.
 
 ### Validation
 
-Validate every input at the boundary with `validate({ params, query, body })`. Handlers receive the parsed output. Use `z.strictObject` for bodies so unknown fields, such as a client-sent price or role, are rejected rather than ignored.
+Validate every input at the boundary with `validate({ params, query, body })`. Handlers receive the parsed output. Use `z.strictObject` for bodies so unknown fields, such as a client-sent price or role, are rejected rather than ignored. Validation details are sorted by `path`, then `message`, so the same payload always produces the same `details` array.
+
+### Pagination and filtering
+
+List endpoints take a cursor page. The query schema is `listQuerySchema({ ...filters })`.
+
+| Query           | Rule                                                                                                           |
+| --------------- | -------------------------------------------------------------------------------------------------------------- |
+| `limit`         | Integer from 1 to 100. Default 20.                                                                             |
+| `cursor`        | Opaque token from the previous `meta.nextCursor`. Invalid tokens are `VALIDATION_ERROR`.                       |
+| Resource fields | Exact match only, declared on that schema. An unknown key, including `sort`, `page`, or `offset`, is rejected. |
+
+Order is fixed: `createdAt` descending, then `id` descending. `createdAtPage` turns the parsed query into `{ limit, cursor }`. The repository fetches `limit + 1` rows, using `(createdAt, id) < (cursor.createdAt, cursor.id)` when a cursor is present, and passes them to `slicePage`. The extra row is not returned; it is what makes `nextCursor` non-null. `pageMeta(limit, nextCursor)` is the `meta` object.
+
+### Idempotency
+
+`POST /api/v1/orders` and any later route that creates an order or records a payment require `Idempotency-Key`. The key is 16 to 128 characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`. A UUID is the usual choice. The key is scoped to the signed-in user and the operation (`orders.create`, and `payments.record` when that route exists), so one key cannot replay a different action.
+
+Mount `idempotency('<scope>')` after `authenticate` and `validate`. A payload that fails validation does not reach the key, so the client can correct it and retry. The guard only replays a result that has already committed, and sets `Idempotency-Replayed: true`. The handler writes that result in the same database transaction as the order. If the transaction rolls back, nothing is stored and the retry can proceed. A committed key is not deleted or replaced. The same key with a different body is `409 IDEMPOTENCY_CONFLICT`. A key that has no finished result is left in place, so a retry cannot start a second order (`409 IDEMPOTENCY_IN_PROGRESS`).
+
+### Audit
+
+Privileged writes record an `audit_events` row in the same transaction as the change. The row stores the actor, the action, the target type and id, the request id, and a flat metadata object. Metadata holds the decision (`from` / `to`, the amount), not a phone, name, token, or receipt.
+
+| Action                | When                                     |
+| --------------------- | ---------------------------------------- |
+| `user.provision`      | An admin creates an account              |
+| `user.status.update`  | An admin changes someone else's status   |
+| `user.role.update`    | An admin changes someone else's role     |
+| `pricing.rule.update` | An admin edits a price rule              |
+| `pricing.area.update` | An admin edits a service-area box        |
+| `order.manual_quote`  | An admin sets the amount due on an order |
+
+A customer's own profile edit or deactivation is not an admin action and is not audited. A refused change, such as a second manual quote, writes nothing.
 
 ## Health checks
 
@@ -242,7 +283,7 @@ All three are public and sit under `/api/v1/auth`. Token responses send `Cache-C
 
 Clients send `Authorization: Bearer <access token>`. Every verification failure returns the same 401.
 
-The token proves identity only. On every request, `authenticate` loads the user's role and status through the token's session in one query. A role change, suspension, logout or reuse revocation therefore takes effect on the next request.
+The token proves identity only. On every request, `authenticate` loads the user's role and status through the token's session in one query. A role change, suspension, deactivation, logout, or reuse revocation takes effect on the next request. A suspended account returns 403 `ACCOUNT_SUSPENDED`. A deactivated account returns 403 `ACCOUNT_DEACTIVATED`.
 
 Protecting a route inside a module:
 
@@ -263,7 +304,20 @@ export const ridersModule: V1Module = {
 };
 ```
 
-`requireRole` is a coarse role gate. Ownership checks, such as a customer reading only their own deliveries, belong in services. Mounting `requireRole` without `authenticate` fails closed with a 500.
+`requireRole` is a coarse role gate. Ownership checks, such as a customer reading only their own deliveries, belong in services. Mounting `requireRole` or `idempotency` without `authenticate` fails closed with a 500.
+
+Order creation, which is what a later payment is collected against:
+
+```ts
+router.post(
+  '/',
+  authenticate,
+  requireRole('customer'),
+  validate({ body: quoteBodySchema }),
+  idempotency('orders.create'),
+  controller.createOrder,
+);
+```
 
 ### Firebase configuration
 
@@ -302,7 +356,19 @@ Firebase, not this API, enforces the OTP itself: code expiry, single use, resend
 - **Refresh.** On a 401 from an API call, refresh once and retry. Allow only one refresh at a time: of two parallel refreshes with the same token, one gets the new pair and the other gets 401. Keep the pair that succeeded and drop the 401. Replaying an old refresh token after the grace window revokes the session.
 - **Known limitation: a lost `/refresh` response still requires a new sign-in.** Only a hash of the new refresh token is stored, so the server cannot resend it. If the response never reaches the app, retrying with the old token returns 401 and the user must sign in again with a new OTP.
 - **Logout.** Call `POST /auth/logout` with the refresh token, then clear secure storage.
-- **Error codes to handle.** `PHONE_NOT_SUPPORTED`, `ACCOUNT_SUSPENDED`, `RATE_LIMITED` (honour `Retry-After`) and `SERVICE_UNAVAILABLE`.
+- **Error codes to handle.** `PHONE_NOT_SUPPORTED`, `ACCOUNT_SUSPENDED`, `ACCOUNT_DEACTIVATED`, `RATE_LIMITED` (honour `Retry-After`) and `SERVICE_UNAVAILABLE`.
+
+### Accounts
+
+`POST /api/v1/auth/firebase` opens a customer for a verified Nigerian mobile number. The first call stores the phone with role `customer`. Account type defaults to `standard`, and name and community start empty. A later sign-in returns that row and does not change its role.
+
+`GET /api/v1/me` restores the profile for the token's user id. A user id in the query is ignored. `PATCH /api/v1/me` sets `name`, `community` (`igbesa`, `lusada`, or `ketu`), and `accountType` (`standard` or `business`). A body that includes `role`, `phone`, `status`, or any other field is rejected.
+
+`POST /api/v1/me/deactivation` with `{}` deactivates the signed-in customer or rider. The next request with that token returns 403 `ACCOUNT_DEACTIVATED`. An admin cannot deactivate their own login on this route.
+
+Admins are not self-serve. `POST /api/v1/users` requires an active admin and creates a `customer` or `admin` for a phone that has no account yet. It does not issue a token, and it does not accept `rider`. An existing phone is a conflict, not a role change. `PATCH /api/v1/users/:id/role` and `PATCH /api/v1/users/:id/status` change someone else's role (`customer` or `admin`) or status (`active`, `suspended`, or `deactivated`). An admin cannot use them on their own id. The local `token:dev` script remains the way to create the first admin.
+
+There is no list of accounts. Identity for the signed-in user always comes from the token.
 
 ### Development tokens
 
@@ -310,7 +376,7 @@ Firebase, not this API, enforces the OTP itself: code expiry, single use, resend
 npm run token:dev -- --phone +2348012345678 --role admin
 ```
 
-The script creates the user or reuses it by phone, sets the requested role, and opens a session without Firebase. The phone accepts the same formats as sign-in (`+234...`, `234...` or `0...`). It prints one JSON line on stdout with the same shape as `tokens` above; the access token is valid for one hour. It refuses to run unless `NODE_ENV` is `development` and `DATABASE_URL` points at localhost.
+The script creates the user or reuses it by phone, sets the requested role, and opens a session without Firebase. Reusing a phone does not change that person's name, community, or account type. The phone accepts the same formats as sign-in (`+234...`, `234...` or `0...`). It prints one JSON line on stdout with the same shape as `tokens` above; the access token is valid for one hour. It refuses to run unless `NODE_ENV` is `development` and `DATABASE_URL` points at localhost. A token for a suspended or deactivated user is printed with a warning and will be rejected.
 
 To try refresh and logout without a phone, capture the tokens and call the endpoints:
 

@@ -1,4 +1,5 @@
 import type { Config } from '../../config/env.js';
+import type { AccountStatus } from '../../types/auth.js';
 import { signAccessToken } from './access-token.service.js';
 import {
   formatRefreshToken,
@@ -30,7 +31,7 @@ export interface OpenSessionInput {
 
 export type RotateTokensResult =
   | { status: 'rotated'; tokens: IssuedTokens }
-  | { status: 'suspended'; userId: string }
+  | { status: 'inactive'; userId: string; userStatus: AccountStatus }
   | { status: 'reused'; userId: string }
   | { status: 'invalid' };
 
@@ -90,7 +91,7 @@ export function createSessionTokens(
     },
 
     /**
-     * A suspended user's token is still consumed by the rotation, so the
+     * An inactive user's token is still consumed by the rotation, so the
      * session cannot be refreshed again after a reinstatement; the user signs
      * in with a new OTP instead.
      */
@@ -105,7 +106,11 @@ export function createSessionTokens(
       });
       if (result.status !== 'rotated') return result;
       if (result.session.userStatus !== 'active') {
-        return { status: 'suspended', userId: result.session.userId };
+        return {
+          status: 'inactive',
+          userId: result.session.userId,
+          userStatus: result.session.userStatus,
+        };
       }
       return {
         status: 'rotated',

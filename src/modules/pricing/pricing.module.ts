@@ -6,6 +6,8 @@ import type { PrismaClient } from '../../lib/prisma.js';
 import { createPricingController } from './pricing.controller.js';
 import { createPricingRepository } from './pricing.repository.js';
 import {
+  areaBodySchema,
+  areaParamsSchema,
   manualQuoteBodySchema,
   orderParamsSchema,
   quoteBodySchema,
@@ -36,6 +38,13 @@ export function createPricingModules(deps: {
         controller.quote,
       );
       router.patch(
+        '/areas/:place',
+        authenticate,
+        requireRole('admin'),
+        validate({ params: areaParamsSchema, body: areaBodySchema }),
+        controller.updateArea,
+      );
+      router.patch(
         '/rules/:component/:tier',
         authenticate,
         requireRole('admin'),
@@ -48,13 +57,17 @@ export function createPricingModules(deps: {
 
   const orders: V1Module = {
     path: '/orders',
-    createRouter({ authenticate, requireRole }) {
+    createRouter({ authenticate, requireRole, idempotency }) {
       const router = Router();
+      // Validate before the guard, so a rejected payload never reaches the
+      // key. The handler stores the result in the order transaction.
+      // Payment routes use this guard.
       router.post(
         '/',
         authenticate,
         requireRole('customer'),
         validate({ body: quoteBodySchema }),
+        idempotency('orders.create'),
         controller.createOrder,
       );
       router.post(

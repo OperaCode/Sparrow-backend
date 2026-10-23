@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { createUsersRepository } from '../../../src/modules/users/users.repository.js';
+import { createUsersRepository } from '#src/modules/users/users.repository.js';
 import { createTestAccount } from '../../helpers/account.js';
 import {
   buildTestApp,
@@ -69,6 +69,21 @@ describe('protected routes against PostgreSQL', () => {
       .get('/api/v1/test-protected/admin')
       .set('Authorization', `Bearer ${token}`)
       .expect(403);
+  });
+
+  it('applies a deactivation immediately to an already-issued token', async () => {
+    const { user, token } = await createTestAccount(prisma, '+2348030000006');
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { status: 'deactivated' },
+    });
+
+    const response = await request(app)
+      .get('/api/v1/test-protected/any')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(403);
+
+    expect(errorOf(response).code).toBe('ACCOUNT_DEACTIVATED');
   });
 
   it('applies a suspension immediately to an already-issued token', async () => {

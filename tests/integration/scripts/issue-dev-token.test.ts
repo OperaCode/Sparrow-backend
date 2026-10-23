@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { createAccessTokenVerifier } from '../../../src/modules/auth/access-token.service.js';
-import { parseRefreshToken } from '../../../src/modules/auth/refresh-token.js';
-import { createUsersRepository } from '../../../src/modules/users/users.repository.js';
+import { createAccessTokenVerifier } from '#src/modules/auth/access-token.service.js';
+import { parseRefreshToken } from '#src/modules/auth/refresh-token.js';
+import { createUsersRepository } from '#src/modules/users/users.repository.js';
 import { testConfig, TEST_JWT_SECRET } from '../../helpers/app.js';
 import {
   createTestPrisma,
@@ -129,7 +129,12 @@ describe('issue-dev-token script', { timeout: SCRIPT_TEST_TIMEOUT_MS }, () => {
     const user = await prisma.user.findUniqueOrThrow({
       where: { phone: '+2348040000002' },
     });
-    expect(user.role).toBe('admin');
+    expect(user).toMatchObject({
+      role: 'admin',
+      accountType: 'standard',
+      name: null,
+      community: null,
+    });
 
     const tokens = printedTokens(result.stdout);
     expect(tokens.tokenType).toBe('Bearer');
@@ -169,7 +174,13 @@ describe('issue-dev-token script', { timeout: SCRIPT_TEST_TIMEOUT_MS }, () => {
 
   it('reuses an existing user and applies the requested role', async () => {
     const existing = await prisma.user.create({
-      data: { phone: '+2348040000003', role: 'customer' },
+      data: {
+        phone: '+2348040000003',
+        role: 'customer',
+        name: 'Ada',
+        community: 'ketu',
+        accountType: 'business',
+      },
     });
 
     const result = runScript(['--phone', '+2348040000003', '--role', 'rider'], {
@@ -180,6 +191,12 @@ describe('issue-dev-token script', { timeout: SCRIPT_TEST_TIMEOUT_MS }, () => {
     expect(printedTokens(result.stdout).tokenType).toBe('Bearer');
     const users = await prisma.user.findMany();
     expect(users).toHaveLength(1);
-    expect(users[0]).toMatchObject({ id: existing.id, role: 'rider' });
+    expect(users[0]).toMatchObject({
+      id: existing.id,
+      role: 'rider',
+      name: 'Ada',
+      community: 'ketu',
+      accountType: 'business',
+    });
   });
 });

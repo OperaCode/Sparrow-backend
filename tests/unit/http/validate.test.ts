@@ -2,10 +2,10 @@ import express from 'express';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { createErrorHandler } from '../../../src/http/middleware/error-handler.js';
-import { requestId } from '../../../src/http/middleware/request-id.js';
-import { validate } from '../../../src/http/middleware/validate.js';
-import { createLogger } from '../../../src/lib/logger.js';
+import { createErrorHandler } from '#src/http/middleware/error-handler.js';
+import { requestId } from '#src/http/middleware/request-id.js';
+import { validate } from '#src/http/middleware/validate.js';
+import { createLogger } from '#src/lib/logger.js';
 import { errorOf } from '../../helpers/http.js';
 import { createLogCapture } from '../../helpers/log-capture.js';
 
@@ -95,6 +95,23 @@ describe('validate middleware', () => {
     expect(errorOf(response).details).toEqual([
       { path: 'body', message: expect.stringContaining('price') as unknown },
     ]);
+  });
+
+  it('returns the same details, sorted by path, for the same invalid payload', async () => {
+    const send = () =>
+      request(buildApp())
+        .post('/items/not-a-uuid?limit=0')
+        .send({ name: '', role: 'nope' });
+
+    const first = await send().expect(400);
+    const second = await send().expect(400);
+
+    expect(errorOf(first).details).toEqual(errorOf(second).details);
+    const paths = (errorOf(first).details ?? []).map((detail) => detail.path);
+    expect(paths).toEqual(
+      [...paths].sort((left, right) => left.localeCompare(right)),
+    );
+    expect(paths[0]).toBe('body.name');
   });
 
   it('rejects a missing body', async () => {
