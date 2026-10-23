@@ -1,6 +1,6 @@
-import type { Config } from '../../src/config/env.js';
-import type { PrismaClient } from '../../src/lib/prisma.js';
-import type { Role } from '../../src/types/auth.js';
+import type { Config } from '#src/config/env.js';
+import type { PrismaClient } from '#src/lib/prisma.js';
+import type { Role } from '#src/types/auth.js';
 import { tokenFor } from './app.js';
 
 /**

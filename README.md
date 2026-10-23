@@ -117,7 +117,12 @@ Client endpoints live under `/api/v1`. Additive changes stay in v1. A breaking c
 A feature module registers itself in `src/api/v1/modules.ts`:
 
 ```ts
-export const v1Modules: readonly V1Module[] = [deliveriesModule];
+export function createV1Modules(deps: {
+  prisma: PrismaClient;
+  logger: Logger;
+}): readonly V1Module[] {
+  return createPricingModules(deps);
+}
 ```
 
 ### Response envelope
@@ -131,7 +136,7 @@ Success:
 }
 ```
 
-`meta` is present only when there is something to put in it. Use `sendData(res, data, { status, meta })`.
+`meta` is present only when there is something to put in it. A list always sends `meta` as `{ "limit", "nextCursor" }`, and `nextCursor` is `null` on the last page. Use `sendData(res, data, { status, meta })`.
 
 Error:
 
@@ -148,26 +153,62 @@ Error:
 
 `details` appears on validation errors only. Every response carries an `X-Request-Id` header that matches the `requestId` in logs and error bodies.
 
-| Status | Code                  | When                                                    |
-| ------ | --------------------- | ------------------------------------------------------- |
-| 400    | `VALIDATION_ERROR`    | Params, query or body failed schema validation          |
-| 400    | `INVALID_JSON`        | Malformed JSON body                                     |
-| 400    | `BAD_REQUEST`         | Other malformed requests                                |
-| 401    | `UNAUTHENTICATED`     | Missing, invalid or expired token, or unknown user      |
-| 403    | `FORBIDDEN`           | Authenticated but not allowed                           |
-| 403    | `ACCOUNT_SUSPENDED`   | User is suspended                                       |
-| 404    | `NOT_FOUND`           | Unknown route or resource                               |
-| 409    | `CONFLICT`            | Uniqueness or state conflict                            |
-| 413    | `PAYLOAD_TOO_LARGE`   | JSON body over 100 kB                                   |
-| 429    | `RATE_LIMITED`        | Rate limit exceeded; see `Retry-After`                  |
-| 503    | `SERVICE_UNAVAILABLE` | A dependency is down (readiness)                        |
-| 500    | `INTERNAL_ERROR`      | Anything unexpected; details are logged, never returned |
+| Status | Code                      | When                                                    |
+| ------ | ------------------------- | ------------------------------------------------------- |
+| 400    | `VALIDATION_ERROR`        | Params, query or body failed schema validation          |
+| 400    | `INVALID_JSON`            | Malformed JSON body                                     |
+| 400    | `BAD_REQUEST`             | Other malformed requests                                |
+| 401    | `UNAUTHENTICATED`         | Missing, invalid or expired token, or unknown user      |
+| 403    | `FORBIDDEN`               | Authenticated but not allowed                           |
+| 403    | `ACCOUNT_SUSPENDED`       | User is suspended                                       |
+| 403    | `ACCOUNT_DEACTIVATED`     | User is deactivated                                     |
+| 404    | `NOT_FOUND`               | Unknown route or resource                               |
+| 409    | `CONFLICT`                | Uniqueness or state conflict                            |
+| 409    | `IDEMPOTENCY_CONFLICT`    | Same idempotency key, different request                 |
+| 409    | `IDEMPOTENCY_IN_PROGRESS` | That key has no finished result and is not taken over   |
+| 413    | `PAYLOAD_TOO_LARGE`       | JSON body over 100 kB                                   |
+| 429    | `RATE_LIMITED`            | Rate limit exceeded; see `Retry-After`                  |
+| 503    | `SERVICE_UNAVAILABLE`     | A dependency is down (readiness)                        |
+| 500    | `INTERNAL_ERROR`          | Anything unexpected; details are logged, never returned |
 
 Throw the typed errors from `src/http/errors.ts`. Anything else becomes a generic 500.
 
 ### Validation
 
-Validate every input at the boundary with `validate({ params, query, body })`. Handlers receive the parsed output. Use `z.strictObject` for bodies so unknown fields, such as a client-sent price or role, are rejected rather than ignored.
+Validate every input at the boundary with `validate({ params, query, body })`. Handlers receive the parsed output. Use `z.strictObject` for bodies so unknown fields, such as a client-sent price or role, are rejected rather than ignored. Validation details are sorted by `path`, then `message`, so the same payload always produces the same `details` array.
+
+### Pagination and filtering
+
+List endpoints take a cursor page. The query schema is `listQuerySchema({ ...filters })`.
+
+| Query           | Rule                                                                                                           |
+| --------------- | -------------------------------------------------------------------------------------------------------------- |
+| `limit`         | Integer from 1 to 100. Default 20.                                                                             |
+| `cursor`        | Opaque token from the previous `meta.nextCursor`. Invalid tokens are `VALIDATION_ERROR`.                       |
+| Resource fields | Exact match only, declared on that schema. An unknown key, including `sort`, `page`, or `offset`, is rejected. |
+
+Order is fixed: `createdAt` descending, then `id` descending. `createdAtPage` turns the parsed query into `{ limit, cursor }`. The repository fetches `limit + 1` rows, using `(createdAt, id) < (cursor.createdAt, cursor.id)` when a cursor is present, and passes them to `slicePage`. The extra row is not returned; it is what makes `nextCursor` non-null. `pageMeta(limit, nextCursor)` is the `meta` object.
+
+### Idempotency
+
+`POST /api/v1/orders` and any later route that creates an order or records a payment require `Idempotency-Key`. The key is 16 to 128 characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`. A UUID is the usual choice. The key is scoped to the signed-in user and the operation (`orders.create`, and `payments.record` when that route exists), so one key cannot replay a different action.
+
+Mount `idempotency('<scope>')` after `authenticate` and `validate`. A payload that fails validation does not reach the key, so the client can correct it and retry. The guard only replays a result that has already committed, and sets `Idempotency-Replayed: true`. The handler writes that result in the same database transaction as the order. If the transaction rolls back, nothing is stored and the retry can proceed. A committed key is not deleted or replaced. The same key with a different body is `409 IDEMPOTENCY_CONFLICT`. A key that has no finished result is left in place, so a retry cannot start a second order (`409 IDEMPOTENCY_IN_PROGRESS`).
+
+### Audit
+
+Privileged writes record an `audit_events` row in the same transaction as the change. The row stores the actor, the action, the target type and id, the request id, and a flat metadata object. Metadata holds the decision (`from` / `to`, the amount), not a phone, name, token, or receipt.
+
+| Action                | When                                     |
+| --------------------- | ---------------------------------------- |
+| `user.provision`      | An admin creates an account              |
+| `user.status.update`  | An admin changes someone else's status   |
+| `user.role.update`    | An admin changes someone else's role     |
+| `pricing.rule.update` | An admin edits a price rule              |
+| `pricing.area.update` | An admin edits a service-area box        |
+| `order.manual_quote`  | An admin sets the amount due on an order |
+
+A customer's own profile edit or deactivation is not an admin action and is not audited. A refused change, such as a second manual quote, writes nothing.
 
 ## Health checks
 
@@ -182,19 +223,19 @@ Health responses are not cached, not logged and not rate limited.
 
 Clients send `Authorization: Bearer <access token>`. Tokens are HS256 JWTs pinned to `JWT_ISSUER`, `JWT_AUDIENCE` and the `at+jwt` type, and must carry `sub`, `exp` and `iat`. Every verification failure returns the same 401.
 
-The token proves identity only. `authenticate` loads the user's role and status from the database on every request, so a role change or suspension takes effect immediately.
+The token proves identity only. `authenticate` loads the user's role and status from the database on every request, so a role change, suspension, or deactivation takes effect immediately. A suspended account returns 403 `ACCOUNT_SUSPENDED`. A deactivated account returns 403 `ACCOUNT_DEACTIVATED`.
 
 Protecting a route inside a module:
 
 ```ts
 export const ridersModule: V1Module = {
-  path: '/riders',
+  path: "/riders",
   createRouter({ authenticate, requireRole }) {
     const router = Router();
     router.get(
-      '/',
+      "/",
       authenticate,
-      requireRole('admin'),
+      requireRole("admin"),
       validate({ query: listRidersQuery }),
       controller.list,
     );
@@ -203,9 +244,32 @@ export const ridersModule: V1Module = {
 };
 ```
 
-`requireRole` is a coarse role gate. Ownership checks, such as a customer reading only their own deliveries, belong in services. Mounting `requireRole` without `authenticate` fails closed with a 500.
+`requireRole` is a coarse role gate. Ownership checks, such as a customer reading only their own deliveries, belong in services. Mounting `requireRole` or `idempotency` without `authenticate` fails closed with a 500.
 
-Token issuance is not exposed over HTTP yet; phone OTP login adds it.
+Order creation, which is what a later payment is collected against:
+
+```ts
+router.post(
+  "/",
+  authenticate,
+  requireRole("customer"),
+  validate({ body: quoteBodySchema }),
+  idempotency("orders.create"),
+  controller.createOrder,
+);
+```
+
+### Accounts
+
+A verified phone opens a customer through `UsersService.openVerifiedCustomer`. The first call stores the phone with role `customer`, account type `standard`, and no name or community. A later call returns that row and does not change its role. The call is not an HTTP route: phone OTP must make it only after the code checks out, then sign an access token. Token issuance is not exposed over HTTP yet.
+
+`GET /api/v1/me` restores the profile for the token's user id. A user id in the query is ignored. `PATCH /api/v1/me` sets `name`, `community` (`igbesa`, `lusada`, or `ketu`), and `accountType` (`standard` or `business`). A body that includes `role`, `phone`, `status`, or any other field is rejected.
+
+`POST /api/v1/me/deactivation` with `{}` deactivates the signed-in customer or rider. The next request with that token returns 403 `ACCOUNT_DEACTIVATED`. An admin cannot deactivate their own login on this route.
+
+Admins are not self-serve. `POST /api/v1/users` requires an active admin and creates a `customer` or `admin` for a phone that has no account yet. It does not issue a token, and it does not accept `rider`. An existing phone is a conflict, not a role change. `PATCH /api/v1/users/:id/role` and `PATCH /api/v1/users/:id/status` change someone else's role (`customer` or `admin`) or status (`active`, `suspended`, or `deactivated`). An admin cannot use them on their own id. The local `token:dev` script remains the way to create the first admin.
+
+There is no list of accounts. Identity for the signed-in user always comes from the token.
 
 ### Development tokens
 
@@ -213,7 +277,7 @@ Token issuance is not exposed over HTTP yet; phone OTP login adds it.
 npm run token:dev -- --phone +2348012345678 --role admin
 ```
 
-The script creates the user or reuses it by phone, sets the requested role, and prints a one-hour token on stdout. It refuses to run unless `NODE_ENV` is `development` and `DATABASE_URL` points at localhost.
+The script creates the user or reuses it by phone, sets the requested role, and prints a one-hour token on stdout. Reusing a phone does not change that person's name, community, or account type. It refuses to run unless `NODE_ENV` is `development` and `DATABASE_URL` points at localhost. A token for a suspended or deactivated user is printed with a warning and will be rejected.
 
 ## Rate limiting and hardening
 

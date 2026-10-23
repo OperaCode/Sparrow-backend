@@ -1,0 +1,61 @@
+---
+description: Architecture and coding standards for the Sparrow backend
+alwaysApply: true
+---
+
+# Architecture
+
+## Files
+
+Name a file `name.role`: the domain, a dot, then its job.
+
+- `pricing.locate.ts`, `health.service.ts`, `access-token.service.ts`
+- Not `pricingLocate.ts`, `pricing_locate.ts`, or `utils.ts`
+
+## Names
+
+Short and specific: `area`, `point`, `quote`. A boolean reads as a question: `overlaps`, `missing`. Skip abbreviations that hide the thing.
+
+## Control flow
+
+Check the failing case first and return or throw. The rest of the function is the success path. Do not wrap it in `else`.
+
+```ts
+if (area === undefined) throw new PricingConfigurationError('missing');
+assertBox(area);
+```
+
+## Lookups
+
+Use a `Map`, `Set`, or a flat list (`filter`, `find`, `flatMap`) for a known set of keys. Do not nest a `for` inside a `for`, and do not nest an `if` under that loop. Do not use `switch` as a lookup table.
+
+A `switch` is only for narrowing a discriminated union, and each branch returns immediately.
+
+```ts
+const overlap = pairs.find(([left, right]) => boxesOverlap(left, right));
+if (overlap !== undefined) throw new PricingConfigurationError('overlap');
+```
+
+## Dependencies
+
+Imports point one way: `http` → controller → service → repository. A file never imports its caller. Put a shared type in a file both sides can import. Repositories are the only Prisma callers. Services never import Express.
+
+## Queries
+
+One query loads a set. Do not query inside a loop over rows. A second query for one known id is fine. A query per row is not.
+
+```ts
+const orders = await prisma.order.findMany({ where: { customerId } });
+const riderIds = orders.flatMap((order) => order.riderId ?? []);
+const riders = await prisma.rider.findMany({
+  where: { id: { in: riderIds } },
+});
+```
+
+Raw SQL stays in a Prisma tagged template, so values are parameters.
+
+## Failures
+
+Fail closed. A broken configuration throws. Do not fill in a default that hides it, and do not catch an error and continue.
+
+One job per function. Pure calculations stay pure. Side effects stay at the edge. Do not export a helper that only tests use. Do not trust the client for a decision the server owns: price, zone, or role.

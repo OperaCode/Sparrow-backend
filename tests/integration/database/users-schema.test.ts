@@ -22,6 +22,9 @@ describe('users table', () => {
     expect(user.id).toMatch(UUID);
     expect(user.role).toBe('customer');
     expect(user.status).toBe('active');
+    expect(user.accountType).toBe('standard');
+    expect(user.name).toBeNull();
+    expect(user.community).toBeNull();
     expect(user.createdAt).toBeInstanceOf(Date);
     expect(user.updatedAt).toBeInstanceOf(Date);
   });
@@ -32,7 +35,13 @@ describe('users table', () => {
     const user = await prisma.user.findUniqueOrThrow({
       where: { phone: '+2348011111111' },
     });
-    expect(user).toMatchObject({ role: 'customer', status: 'active' });
+    expect(user).toMatchObject({
+      role: 'customer',
+      status: 'active',
+      accountType: 'standard',
+      name: null,
+      community: null,
+    });
   });
 
   it('enforces unique phone numbers', async () => {
@@ -63,8 +72,45 @@ describe('users table', () => {
       data: { phone: '+2348020000002', role: 'admin' },
     });
 
+    const deactivated = await prisma.user.create({
+      data: { phone: '+2348020000003', status: 'deactivated' },
+    });
+
     expect(rider).toMatchObject({ role: 'rider', status: 'suspended' });
     expect(admin.role).toBe('admin');
+    expect(deactivated.status).toBe('deactivated');
+  });
+
+  it('stores name, community, and account type', async () => {
+    const user = await prisma.user.create({
+      data: {
+        phone: '+2348020000012',
+        name: 'Ada',
+        community: 'lusada',
+        accountType: 'business',
+      },
+    });
+
+    expect(user).toMatchObject({
+      name: 'Ada',
+      community: 'lusada',
+      accountType: 'business',
+    });
+  });
+
+  it('rejects a blank or untrimmed name', async () => {
+    await expect(
+      prisma.user.create({ data: { phone: '+2348020000010', name: '  Ada' } }),
+    ).rejects.toThrow(/users_name_check/);
+    await expect(
+      prisma.user.create({ data: { phone: '+2348020000011', name: '' } }),
+    ).rejects.toThrow(/users_name_check/);
+  });
+
+  it('rejects a community outside the corridor', async () => {
+    await expect(
+      prisma.$executeRaw`INSERT INTO users (phone, community) VALUES ('+2348020000013', 'outside')`,
+    ).rejects.toThrow(/user_community/);
   });
 
   it('bumps updatedAt on update', async () => {

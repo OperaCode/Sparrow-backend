@@ -1,12 +1,21 @@
-import { Prisma } from '../../generated/prisma/client.js';
-import type { PrismaClient } from '../../lib/prisma.js';
+import { Prisma } from "../../generated/prisma/client.js";
+import type { PrismaClient } from "../../lib/prisma.js";
+import type { AuditActor } from "../../types/auth.js";
+import type { IdempotencyClaim } from "../../types/idempotency.js";
+import { createAuditRepository } from "../audit/audit.repository.js";
+import {
+  readIdempotentResult,
+  saveIdempotentResult,
+} from "../idempotency/idempotency.repository.js";
+import { assertServiceAreaMap, isServiceAreaPlace } from "./pricing.locate.js";
 import {
   PricingConfigurationError,
   amountDue,
-  assertPositiveNaira,
-} from './pricing.money.js';
-import { APPROVED_PRICE_RULES } from './pricing.catalog.js';
+  assertPositiveKobo,
+} from "./pricing.money.js";
 import type {
+  AreaBox,
+  Coordinate,
   ErrandTier,
   Place,
   PriceComponentQuote,
@@ -15,34 +24,53 @@ import type {
   PricedOrder,
   PricingComponent,
   PricingStatus,
-  QuoteInput,
+  QuoteRequest,
   RuleUpdate,
+  ServiceArea,
+  ServiceAreaPlace,
   SpecialPickupTier,
   ZoneTier,
-} from './pricing.types.js';
+} from "./pricing.types.js";
 
-type ServiceType = QuoteInput['service'];
+type ServiceType = QuoteRequest["service"];
 
 interface SnapshotRow {
   id: string;
   serviceType: ServiceType;
   pricingStatus: PricingStatus;
   errandTier: ErrandTier | null;
-  errandAmountNaira: number | null;
+  errandAmountKobo: number | null;
   zoneTier: ZoneTier | null;
-  zoneAmountNaira: number | null;
+  zoneAmountKobo: number | null;
   specialPickupTier: SpecialPickupTier | null;
-  specialPickupAmountNaira: number | null;
-  totalNaira: number | null;
+  specialPickupAmountKobo: number | null;
+  totalKobo: number | null;
+  minimumTotalKobo: number | null;
+  pickupPlace: Place | null;
+  destinationPlace: Place | null;
+  collectionPlace: Place | null;
 }
 
-export type ManualQuoteWriteResult = PricedOrder | 'missing' | 'not_pending';
+export type ManualQuoteWriteResult =
+  PricedOrder | "missing" | "not_pending" | { belowMinimum: number };
+
+export type AreaWriteResult = ServiceArea | "missing" | "invalid";
 
 export interface CreatePricedOrderArgs {
   customerId: string;
-  input: QuoteInput;
-  quoteFromRules: (rules: readonly PriceRuleRecord[]) => PriceQuote;
+  request: QuoteRequest;
+  claim: IdempotencyClaim;
+  quoteFromRules: (
+    rules: readonly PriceRuleRecord[],
+    areas: readonly ServiceArea[],
+  ) => PriceQuote;
 }
+
+export type CreatePricedOrderResult =
+  | { outcome: "created"; order: PricedOrder }
+  | { outcome: "replay"; statusCode: number; body: unknown }
+  | { outcome: "mismatch" }
+  | { outcome: "in_progress" };
 
 export interface PricingRepository {
   listRules(): Promise<PriceRuleRecord[]>;
@@ -50,34 +78,62 @@ export interface PricingRepository {
     component: PricingComponent,
     tier: string,
     patch: RuleUpdate,
+    actor: AuditActor,
   ): Promise<PriceRuleRecord | null>;
-  createPricedOrder(args: CreatePricedOrderArgs): Promise<PricedOrder>;
+  listAreas(): Promise<ServiceArea[]>;
+  updateArea(
+    place: ServiceAreaPlace,
+    box: AreaBox,
+    actor: AuditActor,
+  ): Promise<AreaWriteResult>;
+  createPricedOrder(
+    args: CreatePricedOrderArgs,
+  ): Promise<CreatePricedOrderResult>;
   findOrder(id: string): Promise<PricedOrder | null>;
   applyManualQuote(
     id: string,
-    amountNaira: number,
-    quotedById: string,
+    amountKobo: number,
+    actor: AuditActor,
   ): Promise<ManualQuoteWriteResult>;
 }
 
-function isRecordNotFound(error: unknown): boolean {
+function isUniqueViolation(error: unknown): boolean {
   return (
     error instanceof Prisma.PrismaClientKnownRequestError &&
-    error.code === 'P2025'
+    error.code === "P2002"
   );
 }
 
 function toRule(row: {
-  component: PriceRuleRecord['component'];
+  component: PriceRuleRecord["component"];
   tier: string;
-  quoteMode: PriceRuleRecord['quoteMode'];
-  amountNaira: number | null;
+  quoteMode: PriceRuleRecord["quoteMode"];
+  amountKobo: number | null;
+  minimumKobo: number | null;
 }): PriceRuleRecord {
   return {
     component: row.component,
     tier: row.tier,
     quoteMode: row.quoteMode,
-    amountNaira: row.amountNaira,
+    amountKobo: row.amountKobo,
+    minimumKobo: row.minimumKobo,
+  };
+}
+
+function toArea(row: {
+  place: string;
+  minLatitude: number;
+  maxLatitude: number;
+  minLongitude: number;
+  maxLongitude: number;
+}): ServiceArea | null {
+  if (!isServiceAreaPlace(row.place)) return null;
+  return {
+    place: row.place,
+    minLatitude: row.minLatitude,
+    maxLatitude: row.maxLatitude,
+    minLongitude: row.minLongitude,
+    maxLongitude: row.maxLongitude,
   };
 }
 
@@ -85,26 +141,26 @@ function toPricedOrder(row: SnapshotRow): PricedOrder {
   const components: PriceComponentQuote[] = [];
   if (row.errandTier !== null) {
     components.push({
-      component: 'errand',
+      component: "errand",
       tier: row.errandTier,
-      quoteMode: row.errandAmountNaira === null ? 'manual' : 'automatic',
-      amountNaira: row.errandAmountNaira,
+      quoteMode: row.errandAmountKobo === null ? "manual" : "automatic",
+      amountKobo: row.errandAmountKobo,
     });
   }
   if (row.zoneTier !== null) {
     components.push({
-      component: 'standard_zone',
+      component: "standard_zone",
       tier: row.zoneTier,
-      quoteMode: row.zoneAmountNaira === null ? 'manual' : 'automatic',
-      amountNaira: row.zoneAmountNaira,
+      quoteMode: row.zoneAmountKobo === null ? "manual" : "automatic",
+      amountKobo: row.zoneAmountKobo,
     });
   }
   if (row.specialPickupTier !== null) {
     components.push({
-      component: 'special_pickup',
+      component: "special_pickup",
       tier: row.specialPickupTier,
-      quoteMode: row.specialPickupAmountNaira === null ? 'manual' : 'automatic',
-      amountNaira: row.specialPickupAmountNaira,
+      quoteMode: row.specialPickupAmountKobo === null ? "manual" : "automatic",
+      amountKobo: row.specialPickupAmountKobo,
     });
   }
 
@@ -114,9 +170,13 @@ function toPricedOrder(row: SnapshotRow): PricedOrder {
     id: row.id,
     serviceType: row.serviceType,
     pricingStatus: row.pricingStatus,
-    currency: 'NGN',
+    currency: "NGN",
     components,
-    totalNaira: row.totalNaira,
+    totalKobo: row.totalKobo,
+    minimumTotalKobo: row.minimumTotalKobo,
+    pickupPlace: row.pickupPlace,
+    destinationPlace: row.destinationPlace,
+    collectionPlace: row.collectionPlace,
   };
 }
 
@@ -129,13 +189,24 @@ function assertStoredTotal(
   row: SnapshotRow,
   components: readonly PriceComponentQuote[],
 ): void {
-  if (row.pricingStatus === 'manual_quoted') {
-    assertPositiveNaira(row.totalNaira, 'stored total');
+  if (row.pricingStatus === "manual_quoted") {
+    const total = assertPositiveKobo(row.totalKobo, "stored total");
+    const floor = assertPositiveKobo(row.minimumTotalKobo, "snapshotted floor");
+    if (total < floor) {
+      throw new PricingConfigurationError(
+        "Stored total is below the snapshotted floor",
+      );
+    }
     return;
   }
-  if (row.totalNaira !== amountDue(components)) {
+  if (row.pricingStatus === "pending_manual_quote") {
+    assertPositiveKobo(row.minimumTotalKobo, "snapshotted floor");
+  } else if (row.minimumTotalKobo !== null) {
+    throw new PricingConfigurationError("Automatic order has a manual floor");
+  }
+  if (row.totalKobo !== amountDue(components)) {
     throw new PricingConfigurationError(
-      'Stored total does not match the snapshotted components',
+      "Stored total does not match the snapshotted components",
     );
   }
 }
@@ -145,20 +216,24 @@ interface ManualQuoteRow {
   serviceType: string;
   pricingStatus: string;
   errandTier: string | null;
-  errandAmountNaira: number | string | bigint | null;
+  errandAmountKobo: number | string | bigint | null;
   zoneTier: string | null;
-  zoneAmountNaira: number | string | bigint | null;
+  zoneAmountKobo: number | string | bigint | null;
   specialPickupTier: string | null;
-  specialPickupAmountNaira: number | string | bigint | null;
-  totalNaira: number | string | bigint | null;
+  specialPickupAmountKobo: number | string | bigint | null;
+  totalKobo: number | string | bigint | null;
+  minimumTotalKobo: number | string | bigint | null;
+  pickupPlace: string | null;
+  destinationPlace: string | null;
+  collectionPlace: string | null;
 }
 
-function wholeNaira(value: number | string | bigint | null): number | null {
+function wholeKobo(value: number | string | bigint | null): number | null {
   if (value === null) return null;
-  const amount = typeof value === 'number' ? value : Number(value);
+  const amount = typeof value === "number" ? value : Number(value);
   if (!Number.isSafeInteger(amount)) {
     throw new PricingConfigurationError(
-      'Stored amount was not a whole number of naira',
+      "Stored amount was not a whole number of kobo",
     );
   }
   return amount;
@@ -167,74 +242,93 @@ function wholeNaira(value: number | string | bigint | null): number | null {
 /** The RETURNING row is the charge. A mismatch rolls the update back. */
 function orderFromManualQuote(
   row: ManualQuoteRow,
-  amountNaira: number,
+  amountKobo: number,
 ): PricedOrder {
-  const totalNaira = wholeNaira(row.totalNaira);
-  if (totalNaira !== amountNaira) {
+  const totalKobo = wholeKobo(row.totalKobo);
+  if (totalKobo !== amountKobo) {
     throw new PricingConfigurationError(
-      'Manual quote was not stored as entered',
+      "Manual quote was not stored as entered",
     );
   }
   return toPricedOrder({
     id: row.id,
     serviceType: row.serviceType as ServiceType,
-    pricingStatus: 'manual_quoted',
+    pricingStatus: "manual_quoted",
     errandTier: row.errandTier as ErrandTier | null,
-    errandAmountNaira: wholeNaira(row.errandAmountNaira),
+    errandAmountKobo: wholeKobo(row.errandAmountKobo),
     zoneTier: row.zoneTier as ZoneTier | null,
-    zoneAmountNaira: wholeNaira(row.zoneAmountNaira),
+    zoneAmountKobo: wholeKobo(row.zoneAmountKobo),
     specialPickupTier: row.specialPickupTier as SpecialPickupTier | null,
-    specialPickupAmountNaira: wholeNaira(row.specialPickupAmountNaira),
-    totalNaira,
+    specialPickupAmountKobo: wholeKobo(row.specialPickupAmountKobo),
+    totalKobo,
+    minimumTotalKobo: wholeKobo(row.minimumTotalKobo),
+    pickupPlace: row.pickupPlace as Place | null,
+    destinationPlace: row.destinationPlace as Place | null,
+    collectionPlace: row.collectionPlace as Place | null,
   });
 }
 
-function placeOrNull(place: Place | undefined): Place | null {
-  return place ?? null;
+function coordinateOrNull(point: Coordinate | undefined): {
+  latitude: number | null;
+  longitude: number | null;
+} {
+  if (point === undefined) return { latitude: null, longitude: null };
+  return { latitude: point.latitude, longitude: point.longitude };
 }
 
 function orderCreateData(
   customerId: string,
-  input: QuoteInput,
+  request: QuoteRequest,
   quote: PriceQuote,
 ): Prisma.OrderCreateInput {
+  const pickup = coordinateOrNull(
+    "pickup" in request ? request.pickup : undefined,
+  );
+  const destination = coordinateOrNull(
+    "destination" in request ? request.destination : undefined,
+  );
+  const collection = coordinateOrNull(
+    request.service === "special_pickup" ? request.collection : undefined,
+  );
   const zone = quote.components.find(
-    (component) => component.component === 'standard_zone',
+    (component) => component.component === "standard_zone",
   );
   const specialPickup = quote.components.find(
-    (component) => component.component === 'special_pickup',
+    (component) => component.component === "special_pickup",
   );
   const errand = quote.components.find(
-    (component) => component.component === 'errand',
+    (component) => component.component === "errand",
   );
 
   return {
     customer: { connect: { id: customerId } },
-    serviceType: input.service,
-    pickupPlace: placeOrNull('pickup' in input ? input.pickup : undefined),
-    destinationPlace: placeOrNull(
-      'destination' in input ? input.destination : undefined,
-    ),
-    collectionPlace:
-      input.service === 'special_pickup' ? input.collection : null,
-    errandTier: input.service === 'errand' ? input.errandTier : null,
+    serviceType: request.service,
+    pickupPlace: quote.pickupPlace,
+    destinationPlace: quote.destinationPlace,
+    collectionPlace: quote.collectionPlace,
+    pickupLatitude: pickup.latitude,
+    pickupLongitude: pickup.longitude,
+    destinationLatitude: destination.latitude,
+    destinationLongitude: destination.longitude,
+    collectionLatitude: collection.latitude,
+    collectionLongitude: collection.longitude,
+    errandTier: request.service === "errand" ? request.errandTier : null,
     pricingStatus: quote.pricingStatus,
     zoneTier: zone?.tier ?? null,
-    zoneAmountNaira: zone?.amountNaira ?? null,
+    zoneAmountKobo: zone?.amountKobo ?? null,
     specialPickupTier: specialPickup?.tier ?? null,
-    specialPickupAmountNaira: specialPickup?.amountNaira ?? null,
-    errandAmountNaira: errand?.amountNaira ?? null,
-    totalNaira: quote.totalNaira,
+    specialPickupAmountKobo: specialPickup?.amountKobo ?? null,
+    errandAmountKobo: errand?.amountKobo ?? null,
+    totalKobo: quote.totalKobo,
+    minimumTotalKobo: quote.minimumTotalKobo,
   };
-}
-
-export async function seedApprovedPrices(prisma: PrismaClient): Promise<void> {
-  await prisma.priceRule.createMany({ data: [...APPROVED_PRICE_RULES] });
 }
 
 export function createPricingRepository(
   prisma: PrismaClient,
 ): PricingRepository {
+  const audit = createAuditRepository();
+
   async function findOrder(id: string): Promise<PricedOrder | null> {
     const row = await prisma.order.findUnique({ where: { id } });
     return row === null ? null : toPricedOrder(row);
@@ -246,41 +340,170 @@ export function createPricingRepository(
       return rows.map(toRule);
     },
 
-    async updateRule(component, tier, patch) {
-      try {
-        const row = await prisma.priceRule.update({
+    async updateRule(component, tier, patch, actor) {
+      return prisma.$transaction(async (tx) => {
+        const existing = await tx.priceRule.findUnique({
           where: { component_tier: { component, tier } },
+        });
+        if (existing === null) return null;
+        const row = await tx.priceRule.update({
+          where: { id: existing.id },
           data: {
             quoteMode: patch.quoteMode,
-            amountNaira: patch.amountNaira,
+            amountKobo: patch.amountKobo,
+            minimumKobo: patch.minimumKobo,
+          },
+        });
+        await tx.priceRuleChange.create({
+          data: {
+            ruleId: existing.id,
+            component: existing.component,
+            tier: existing.tier,
+            actorId: actor.actorId,
+            oldQuoteMode: existing.quoteMode,
+            oldAmountKobo: existing.amountKobo,
+            oldMinimumKobo: existing.minimumKobo,
+            newQuoteMode: patch.quoteMode,
+            newAmountKobo: patch.amountKobo,
+            newMinimumKobo: patch.minimumKobo,
+          },
+        });
+        await audit.record(tx, {
+          actorId: actor.actorId,
+          requestId: actor.requestId,
+          action: "pricing.rule.update",
+          targetType: "price_rule",
+          targetId: `${component}:${tier}`,
+          metadata: {
+            fromQuoteMode: existing.quoteMode,
+            toQuoteMode: row.quoteMode,
+            fromAmountKobo: existing.amountKobo,
+            toAmountKobo: row.amountKobo,
+            fromMinimumKobo: existing.minimumKobo,
+            toMinimumKobo: row.minimumKobo,
           },
         });
         return toRule(row);
-      } catch (error) {
-        if (isRecordNotFound(error)) return null;
-        throw error;
-      }
+      });
+    },
+
+    async listAreas() {
+      const rows = await prisma.serviceArea.findMany();
+      return rows.flatMap((row) => {
+        const area = toArea(row);
+        return area === null ? [] : [area];
+      });
+    },
+
+    async updateArea(place, box, actor) {
+      return prisma.$transaction(async (tx) => {
+        const rows = await tx.$queryRaw<
+          {
+            place: string;
+            minLatitude: number;
+            maxLatitude: number;
+            minLongitude: number;
+            maxLongitude: number;
+          }[]
+        >`
+          SELECT
+            "place"::text AS "place",
+            "min_latitude" AS "minLatitude",
+            "max_latitude" AS "maxLatitude",
+            "min_longitude" AS "minLongitude",
+            "max_longitude" AS "maxLongitude"
+          FROM "service_areas"
+          FOR UPDATE
+        `;
+        const areas = rows.flatMap((row) => {
+          const area = toArea(row);
+          return area === null ? [] : [area];
+        });
+        if (!areas.some((area) => area.place === place)) return "missing";
+        const next = areas.map((area) =>
+          area.place === place ? { place, ...box } : area,
+        );
+        try {
+          assertServiceAreaMap(next);
+        } catch (error) {
+          if (error instanceof PricingConfigurationError) return "invalid";
+          throw error;
+        }
+        const previous = areas.find((area) => area.place === place);
+        const row = await tx.serviceArea.update({
+          where: { place },
+          data: box,
+        });
+        const updated = toArea(row);
+        if (updated === null || previous === undefined) {
+          throw new PricingConfigurationError(
+            "Updated area is not on the service map",
+          );
+        }
+        await audit.record(tx, {
+          actorId: actor.actorId,
+          requestId: actor.requestId,
+          action: "pricing.area.update",
+          targetType: "service_area",
+          targetId: place,
+          metadata: {
+            fromMinLatitude: previous.minLatitude,
+            toMinLatitude: updated.minLatitude,
+            fromMaxLatitude: previous.maxLatitude,
+            toMaxLatitude: updated.maxLatitude,
+            fromMinLongitude: previous.minLongitude,
+            toMinLongitude: updated.minLongitude,
+            fromMaxLongitude: previous.maxLongitude,
+            toMaxLongitude: updated.maxLongitude,
+          },
+        });
+        return updated;
+      });
     },
 
     /**
      * Reads the price list and inserts the snapshot in one transaction, so
      * the stored total is the list at that moment and later edits miss it.
+     * The idempotency result is inserted in that same transaction. A rollback
+     * removes both. A unique violation means this key already committed, so
+     * the stored result is returned.
      */
-    async createPricedOrder({ customerId, input, quoteFromRules }) {
-      const row = await prisma.$transaction(async (tx) => {
-        const rules = (await tx.priceRule.findMany()).map(toRule);
-        const quote = quoteFromRules(rules);
-        const due = amountDue(quote.components);
-        if (quote.totalNaira !== due) {
-          throw new PricingConfigurationError(
-            'Refusing to store a quote whose total does not match its components',
-          );
-        }
-        return tx.order.create({
-          data: orderCreateData(customerId, input, quote),
+    async createPricedOrder({ customerId, request, claim, quoteFromRules }) {
+      try {
+        const order = await prisma.$transaction(async (tx) => {
+          const rules = (await tx.priceRule.findMany()).map(toRule);
+          const areas = (await tx.serviceArea.findMany()).flatMap((area) => {
+            const mapped = toArea(area);
+            return mapped === null ? [] : [mapped];
+          });
+          const quote = quoteFromRules(rules, areas);
+          if (quote.pricingStatus === "pending_manual_quote") {
+            assertPositiveKobo(quote.minimumTotalKobo, "quote floor");
+          } else if (quote.minimumTotalKobo !== null) {
+            throw new PricingConfigurationError(
+              "Automatic quote includes a manual floor",
+            );
+          }
+          const due = amountDue(quote.components);
+          if (quote.totalKobo !== due) {
+            throw new PricingConfigurationError(
+              "Refusing to store a quote whose total does not match its components",
+            );
+          }
+          const row = await tx.order.create({
+            data: orderCreateData(customerId, request, quote),
+          });
+          const created = toPricedOrder(row);
+          await saveIdempotentResult(tx, claim, 201, { data: created });
+          return created;
         });
-      });
-      return toPricedOrder(row);
+        return { outcome: "created" as const, order };
+      } catch (error) {
+        if (!isUniqueViolation(error)) throw error;
+        const saved = await readIdempotentResult(prisma, claim);
+        if (saved.outcome === "fresh") throw error;
+        return saved;
+      }
     },
 
     findOrder,
@@ -290,41 +513,75 @@ export function createPricingRepository(
      * read could observe a different total, or miss the row after the charge
      * was saved.
      */
-    async applyManualQuote(id, amountNaira, quotedById) {
-      assertPositiveNaira(amountNaira, 'manual quote');
+    async applyManualQuote(id, amountKobo, actor) {
+      assertPositiveKobo(amountKobo, "manual quote");
       return prisma.$transaction(async (tx) => {
         const rows = await tx.$queryRaw<ManualQuoteRow[]>`
           UPDATE "orders"
           SET
             "pricing_status" = 'manual_quoted',
-            "total_naira" = ${amountNaira},
-            "quoted_by_id" = CAST(${quotedById} AS uuid),
+            "total_kobo" = ${amountKobo},
+            "quoted_by_id" = CAST(${actor.actorId} AS uuid),
             "quoted_at" = CURRENT_TIMESTAMP,
             "updated_at" = CURRENT_TIMESTAMP
           WHERE "id" = CAST(${id} AS uuid)
             AND "pricing_status" = 'pending_manual_quote'
+            AND "minimum_total_kobo" IS NOT NULL
+            AND "minimum_total_kobo" <= ${amountKobo}
           RETURNING
             "id",
             "service_type" AS "serviceType",
             "pricing_status" AS "pricingStatus",
             "errand_tier" AS "errandTier",
-            "errand_amount_naira" AS "errandAmountNaira",
+            "errand_amount_kobo" AS "errandAmountKobo",
             "zone_tier" AS "zoneTier",
-            "zone_amount_naira" AS "zoneAmountNaira",
+            "zone_amount_kobo" AS "zoneAmountKobo",
             "special_pickup_tier" AS "specialPickupTier",
-            "special_pickup_amount_naira" AS "specialPickupAmountNaira",
-            "total_naira" AS "totalNaira"
+            "special_pickup_amount_kobo" AS "specialPickupAmountKobo",
+            "total_kobo" AS "totalKobo",
+            "minimum_total_kobo" AS "minimumTotalKobo",
+            "pickup_place"::text AS "pickupPlace",
+            "destination_place"::text AS "destinationPlace",
+            "collection_place"::text AS "collectionPlace"
         `;
         const written = rows[0];
         if (written !== undefined) {
-          return orderFromManualQuote(written, amountNaira);
+          await audit.record(tx, {
+            actorId: actor.actorId,
+            requestId: actor.requestId,
+            action: "order.manual_quote",
+            targetType: "order",
+            targetId: id,
+            metadata: { amountKobo },
+          });
+          return orderFromManualQuote(written, amountKobo);
         }
 
         const existing = await tx.order.findUnique({
           where: { id },
-          select: { id: true },
+          select: {
+            id: true,
+            pricingStatus: true,
+            minimumTotalKobo: true,
+          },
         });
-        return existing === null ? 'missing' : 'not_pending';
+        if (existing === null) return "missing";
+        if (
+          existing.pricingStatus === "pending_manual_quote" &&
+          existing.minimumTotalKobo !== null &&
+          amountKobo < existing.minimumTotalKobo
+        ) {
+          return { belowMinimum: existing.minimumTotalKobo };
+        }
+        if (
+          existing.pricingStatus === "pending_manual_quote" &&
+          existing.minimumTotalKobo === null
+        ) {
+          throw new PricingConfigurationError(
+            "Pending quote is missing its floor",
+          );
+        }
+        return "not_pending";
       });
     },
   };

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyServerTimeouts,
   SERVER_TIMEOUTS,
-} from '../../../src/http/server-timeouts.js';
+} from '#src/http/server-timeouts.js';
 import { buildTestApp, testConfig } from '../../helpers/app.js';
 
 const ALLOWED_ORIGIN = 'http://localhost:8081';
