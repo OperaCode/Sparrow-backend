@@ -1,86 +1,97 @@
 import type { PriceRuleRecord } from './pricing.types.js';
 
 /**
- * Approved V1 rates inserted by the pricing migration. Live quotes read
- * price_rules, not this list, so operations can change a rate without an
- * app release. Keep the migration seed in step with these rows.
+ * Approved V1 rates in kobo (100 kobo = ₦1). Live quotes read price_rules,
+ * not this list, so operations can change a rate without an app release.
+ * Manual tiers have no charge and a floor: extended delivery 150_000
+ * (₦1,500), extended pickup and complex errands 100_000 (₦1,000). Outside
+ * the service area has no published price; its floor is the extended floor,
+ * so a quote cannot undercut that band. The pricing migration seed matches
+ * these rows.
  */
 export const APPROVED_PRICE_RULES: readonly PriceRuleRecord[] = [
   {
     component: 'standard_zone',
     tier: 'A',
-    amountNaira: 800,
+    amountKobo: 80_000,
+    minimumKobo: null,
     quoteMode: 'automatic',
   },
   {
     component: 'standard_zone',
     tier: 'B',
-    amountNaira: 1000,
+    amountKobo: 100_000,
+    minimumKobo: null,
     quoteMode: 'automatic',
   },
   {
     component: 'standard_zone',
     tier: 'C',
-    amountNaira: 1300,
+    amountKobo: 130_000,
+    minimumKobo: null,
     quoteMode: 'automatic',
   },
   {
     component: 'standard_zone',
     tier: 'extended',
-    amountNaira: null,
+    amountKobo: null,
+    minimumKobo: 150_000,
     quoteMode: 'manual',
   },
   {
     component: 'standard_zone',
     tier: 'outside_area',
-    amountNaira: null,
+    amountKobo: null,
+    minimumKobo: 150_000,
     quoteMode: 'manual',
   },
   {
     component: 'special_pickup',
     tier: 'local',
-    amountNaira: 500,
+    amountKobo: 50_000,
+    minimumKobo: null,
     quoteMode: 'automatic',
   },
   {
     component: 'special_pickup',
     tier: 'nearby',
-    amountNaira: 700,
+    amountKobo: 70_000,
+    minimumKobo: null,
     quoteMode: 'automatic',
   },
   {
     component: 'special_pickup',
     tier: 'extended',
-    amountNaira: null,
+    amountKobo: null,
+    minimumKobo: 100_000,
     quoteMode: 'manual',
   },
   {
     component: 'special_pickup',
     tier: 'outside_area',
-    amountNaira: null,
+    amountKobo: null,
+    minimumKobo: 100_000,
     quoteMode: 'manual',
   },
   {
     component: 'errand',
     tier: 'simple',
-    amountNaira: 500,
+    amountKobo: 50_000,
+    minimumKobo: null,
     quoteMode: 'automatic',
   },
   {
     component: 'errand',
     tier: 'moderate',
-    amountNaira: 700,
+    amountKobo: 70_000,
+    minimumKobo: null,
     quoteMode: 'automatic',
   },
   {
     component: 'errand',
     tier: 'complex',
-    amountNaira: null,
+    amountKobo: null,
+    minimumKobo: 100_000,
     quoteMode: 'manual',
   },
 ];
-
-export function priceRuleSqlTuple(rule: PriceRuleRecord): string {
-  const amount = rule.amountNaira === null ? 'NULL' : String(rule.amountNaira);
-  return `('${rule.component}', '${rule.tier}', ${amount}, '${rule.quoteMode}')`;
-}

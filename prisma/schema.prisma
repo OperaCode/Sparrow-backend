@@ -35,6 +35,7 @@ model User {
 
   orders Order[] @relation("OrderCustomer")
   quotes Order[] @relation("OrderQuotedBy")
+  priceRuleChanges PriceRuleChange[]
 
   @@map("users")
 }
@@ -109,24 +110,64 @@ enum ErrandTier {
   @@map("errand_tier")
 }
 
-/// Live price list. Amounts are whole naira. Manual tiers have no amount;
-/// operations agrees a price per order. Editing a row does not change orders
-/// already priced.
+/// Live price list. Amounts are whole kobo. Automatic tiers store a charge.
+/// Manual tiers store no charge and a per-leg minimum. The order floor is the
+/// sum of the automatic charges and those minimums. Editing a row does not
+/// change orders already priced; each edit is recorded on PriceRuleChange.
 model PriceRule {
   id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   component   PricingComponent
   tier        String           @db.VarChar(32)
-  amountNaira Int?             @map("amount_naira")
+  amountKobo  Int?             @map("amount_kobo")
+  minimumKobo Int?             @map("minimum_kobo")
   quoteMode   QuoteMode        @map("quote_mode")
   createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  changes     PriceRuleChange[]
 
   @@unique([component, tier])
   @@map("price_rules")
 }
 
-/// Component amounts and totalNaira are copied at pricing time. They are the
-/// amount due for that order and are not recomputed when price rules change.
+/// Who changed a live price, what it was, and what it became.
+model PriceRuleChange {
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ruleId         String           @map("rule_id") @db.Uuid
+  rule           PriceRule        @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+  component      PricingComponent
+  tier           String           @db.VarChar(32)
+  actorId        String           @map("actor_id") @db.Uuid
+  actor          User             @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  oldQuoteMode   QuoteMode        @map("old_quote_mode")
+  oldAmountKobo  Int?             @map("old_amount_kobo")
+  oldMinimumKobo Int?             @map("old_minimum_kobo")
+  newQuoteMode   QuoteMode        @map("new_quote_mode")
+  newAmountKobo  Int?             @map("new_amount_kobo")
+  newMinimumKobo Int?             @map("new_minimum_kobo")
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([ruleId])
+  @@index([actorId])
+  @@map("price_rule_changes")
+}
+
+/// Boxes the server uses to classify a coordinate. Outside is any point none
+/// of these contain. Editing a box does not reclassify orders already priced.
+model ServiceArea {
+  place        Place    @id
+  minLatitude  Float    @map("min_latitude")
+  maxLatitude  Float    @map("max_latitude")
+  minLongitude Float    @map("min_longitude")
+  maxLongitude Float    @map("max_longitude")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("service_areas")
+}
+
+/// Coordinates are the points classified at pricing time. Places, component
+/// amounts, totalKobo and minimumTotalKobo are that classification and are
+/// not recomputed when prices or areas change.
 model Order {
   id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   customerId String  @map("customer_id") @db.Uuid
@@ -140,13 +181,21 @@ model Order {
   collectionPlace  Place?      @map("collection_place")
   errandTier       ErrandTier? @map("errand_tier")
 
+  pickupLatitude       Float? @map("pickup_latitude")
+  pickupLongitude      Float? @map("pickup_longitude")
+  destinationLatitude  Float? @map("destination_latitude")
+  destinationLongitude Float? @map("destination_longitude")
+  collectionLatitude   Float? @map("collection_latitude")
+  collectionLongitude  Float? @map("collection_longitude")
+
   pricingStatus            PricingStatus      @map("pricing_status")
   zoneTier                 ZoneTier?          @map("zone_tier")
-  zoneAmountNaira          Int?               @map("zone_amount_naira")
+  zoneAmountKobo          Int?               @map("zone_amount_kobo")
   specialPickupTier        SpecialPickupTier? @map("special_pickup_tier")
-  specialPickupAmountNaira Int?               @map("special_pickup_amount_naira")
-  errandAmountNaira        Int?               @map("errand_amount_naira")
-  totalNaira               Int?               @map("total_naira")
+  specialPickupAmountKobo Int?               @map("special_pickup_amount_kobo")
+  errandAmountKobo        Int?               @map("errand_amount_kobo")
+  totalKobo               Int?               @map("total_kobo")
+  minimumTotalKobo        Int?               @map("minimum_total_kobo")
   quotedAt                 DateTime?          @map("quoted_at") @db.Timestamptz(3)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)

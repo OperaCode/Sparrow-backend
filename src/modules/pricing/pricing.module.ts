@@ -6,6 +6,8 @@ import type { PrismaClient } from '../../lib/prisma.js';
 import { createPricingController } from './pricing.controller.js';
 import { createPricingRepository } from './pricing.repository.js';
 import {
+  areaBodySchema,
+  areaParamsSchema,
   manualQuoteBodySchema,
   orderParamsSchema,
   quoteBodySchema,
@@ -34,6 +36,13 @@ export function createPricingModules(deps: {
         authenticate,
         validate({ body: quoteBodySchema }),
         controller.quote,
+      );
+      router.patch(
+        '/areas/:place',
+        authenticate,
+        requireRole('admin'),
+        validate({ params: areaParamsSchema, body: areaBodySchema }),
+        controller.updateArea,
       );
       router.patch(
         '/rules/:component/:tier',
