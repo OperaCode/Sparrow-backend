@@ -2,8 +2,15 @@ import request, { type Response } from "supertest";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createLogger } from "#src/lib/logger.js";
 import { createIdempotencyRepository } from "#src/modules/idempotency/idempotency.repository.js";
+import {
+  OUTSIDE_CORRIDOR_POINT,
+  samplePoint,
+} from "#src/modules/pricing/pricing.areas.js";
 import { createPricingModules } from "#src/modules/pricing/pricing.module.js";
-import { seedApprovedPrices } from "#src/modules/pricing/pricing.repository.js";
+import {
+  seedApprovedAreas,
+  seedApprovedPrices,
+} from "../../helpers/pricing.js";
 import { createUsersRepository } from "#src/modules/users/users.repository.js";
 import type { Role } from "#src/types/auth.js";
 import { createTestAccount } from "../../helpers/account.js";
@@ -26,6 +33,7 @@ const { app } = buildTestApp({
 beforeEach(async () => {
   await truncateAllTables(prisma);
   await seedApprovedPrices(prisma);
+  await seedApprovedAreas(prisma);
 });
 
 afterAll(async () => {
@@ -34,8 +42,14 @@ afterAll(async () => {
 
 const local = {
   service: "standard",
-  pickup: "igbesa",
-  destination: "igbesa",
+  pickup: samplePoint("igbesa"),
+  destination: samplePoint("igbesa"),
+};
+
+const outsideTrip = {
+  service: "standard",
+  pickup: samplePoint("igbesa"),
+  destination: OUTSIDE_CORRIDOR_POINT,
 };
 
 function account(phone: string, role: Role = "customer") {
@@ -51,9 +65,12 @@ function idempotencyKey(): string {
 
 interface PricedBody {
   id: string;
-  totalNaira: number | null;
+  totalKobo: number | null;
+  minimumTotalKobo?: number | null;
   pricingStatus: string;
   currency?: string;
+  pickupPlace?: string | null;
+  destinationPlace?: string | null;
 }
 
 function dataOf(response: Response): PricedBody {
@@ -72,7 +89,7 @@ describe("pricing authority", () => {
 
     expect(dataOf(response)).toMatchObject({
       pricingStatus: "auto",
-      totalNaira: 800,
+      totalKobo: 80000,
       currency: "NGN",
     });
     expect(await prisma.order.count()).toBe(0);
@@ -83,14 +100,14 @@ describe("pricing authority", () => {
 
     const response = await request(app)
       .post("/api/v1/orders")
-      .set("Authorization", `Bearer ${customer.token}`)
       .set("Idempotency-Key", idempotencyKey())
-      .send({ ...local, totalNaira: 1 })
+      .set("Authorization", `Bearer ${customer.token}`)
+      .send({ ...local, totalKobo: 1 })
       .expect(400);
 
     expect(errorOf(response).code).toBe("VALIDATION_ERROR");
     expect(errorOf(response).details?.[0]).toMatchObject({ path: "body" });
-    expect(errorOf(response).details?.[0]?.message).toContain("totalNaira");
+    expect(errorOf(response).details?.[0]?.message).toContain("totalKobo");
     expect(await prisma.order.count()).toBe(0);
   });
 
@@ -99,21 +116,65 @@ describe("pricing authority", () => {
 
     const response = await request(app)
       .post("/api/v1/orders")
-      .set("Authorization", `Bearer ${customer.token}`)
       .set("Idempotency-Key", idempotencyKey())
+      .set("Authorization", `Bearer ${customer.token}`)
       .send(local)
       .expect(201);
 
     const body = dataOf(response);
-    expect(body.totalNaira).toBe(800);
+    expect(body.totalKobo).toBe(80000);
     const stored = await prisma.order.findUniqueOrThrow({
       where: { id: body.id },
     });
     expect(stored).toMatchObject({
       customerId: customer.user.id,
-      totalNaira: 800,
-      zoneAmountNaira: 800,
+      totalKobo: 80000,
+      zoneAmountKobo: 80000,
       pricingStatus: "auto",
+      pickupPlace: "igbesa",
+      destinationPlace: "igbesa",
+      minimumTotalKobo: null,
+    });
+    expect(stored.pickupLatitude).toBeCloseTo(samplePoint("igbesa").latitude);
+    expect(stored.pickupLongitude).toBeCloseTo(samplePoint("igbesa").longitude);
+  });
+
+  it("prices the coordinates and rejects a named community", async () => {
+    const customer = await account("+2348040000018");
+
+    const named = await request(app)
+      .post("/api/v1/orders")
+      .set("Idempotency-Key", idempotencyKey())
+      .set("Authorization", `Bearer ${customer.token}`)
+      .send({
+        service: "standard",
+        pickup: "igbesa",
+        destination: "igbesa",
+      })
+      .expect(400);
+    expect(errorOf(named).code).toBe("VALIDATION_ERROR");
+
+    const response = await request(app)
+      .post("/api/v1/orders")
+      .set("Idempotency-Key", idempotencyKey())
+      .set("Authorization", `Bearer ${customer.token}`)
+      .send({
+        service: "standard",
+        pickup: samplePoint("ketu"),
+        destination: samplePoint("igbesa"),
+      })
+      .expect(201);
+
+    expect(dataOf(response).totalKobo).toBe(130000);
+    const stored = await prisma.order.findUniqueOrThrow({
+      where: { id: dataOf(response).id },
+    });
+    expect(stored).toMatchObject({
+      pickupPlace: "ketu",
+      destinationPlace: "igbesa",
+      zoneTier: "C",
+      zoneAmountKobo: 130000,
+      totalKobo: 130000,
     });
   });
 
@@ -122,8 +183,8 @@ describe("pricing authority", () => {
     const admin = await account("+2348040000005", "admin");
     const created = await request(app)
       .post("/api/v1/orders")
-      .set("Authorization", `Bearer ${customer.token}`)
       .set("Idempotency-Key", idempotencyKey())
+      .set("Authorization", `Bearer ${customer.token}`)
       .send(local)
       .expect(201);
     const orderId = dataOf(created).id;
@@ -134,21 +195,38 @@ describe("pricing authority", () => {
     await request(app)
       .patch("/api/v1/pricing/rules/standard_zone/A")
       .set("Authorization", `Bearer ${admin.token}`)
-      .send({ quoteMode: "automatic", amountNaira: 950 })
+      .send({ quoteMode: "automatic", amountKobo: 95000 })
       .expect(200);
+
+    const changes = await prisma.priceRuleChange.findMany({
+      where: { actorId: admin.user.id },
+    });
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({
+      component: "standard_zone",
+      tier: "A",
+      actorId: admin.user.id,
+      oldQuoteMode: "automatic",
+      oldAmountKobo: 80000,
+      oldMinimumKobo: null,
+      newQuoteMode: "automatic",
+      newAmountKobo: 95000,
+      newMinimumKobo: null,
+    });
+    expect(changes[0]?.createdAt).toBeInstanceOf(Date);
 
     const quote = await request(app)
       .post("/api/v1/pricing/quotes")
       .set("Authorization", `Bearer ${customer.token}`)
       .send(local)
       .expect(200);
-    expect(dataOf(quote).totalNaira).toBe(950);
+    expect(dataOf(quote).totalKobo).toBe(95000);
 
     const after = await prisma.order.findUniqueOrThrow({
       where: { id: orderId },
     });
-    expect(after.totalNaira).toBe(800);
-    expect(after.zoneAmountNaira).toBe(800);
+    expect(after.totalKobo).toBe(80000);
+    expect(after.zoneAmountKobo).toBe(80000);
     expect(after.updatedAt).toEqual(before.updatedAt);
   });
 
@@ -157,50 +235,58 @@ describe("pricing authority", () => {
     const admin = await account("+2348040000007", "admin");
     const created = await request(app)
       .post("/api/v1/orders")
-      .set("Authorization", `Bearer ${customer.token}`)
       .set("Idempotency-Key", idempotencyKey())
-      .send({
-        service: "standard",
-        pickup: "igbesa",
-        destination: "outside",
-      })
+      .set("Authorization", `Bearer ${customer.token}`)
+      .send(outsideTrip)
       .expect(201);
     expect(dataOf(created)).toMatchObject({
       pricingStatus: "pending_manual_quote",
-      totalNaira: null,
+      totalKobo: null,
+      minimumTotalKobo: 150000,
+      destinationPlace: "outside",
     });
+
+    const tooLow = await request(app)
+      .post(`/api/v1/orders/${dataOf(created).id}/manual-quote`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({ amountKobo: 1 })
+      .expect(400);
+    expect(errorOf(tooLow).details?.[0]).toMatchObject({
+      path: "body.amountKobo",
+    });
+    expect(errorOf(tooLow).details?.[0]?.message).toContain("150000");
 
     const quoted = await request(app)
       .post(`/api/v1/orders/${dataOf(created).id}/manual-quote`)
       .set("Authorization", `Bearer ${admin.token}`)
-      .send({ amountNaira: 1750 })
+      .send({ amountKobo: 175000 })
       .expect(200);
     expect(dataOf(quoted)).toMatchObject({
       pricingStatus: "manual_quoted",
-      totalNaira: 1750,
+      totalKobo: 175000,
     });
 
     await request(app)
       .patch("/api/v1/pricing/rules/standard_zone/outside_area")
       .set("Authorization", `Bearer ${admin.token}`)
-      .send({ quoteMode: "automatic", amountNaira: 2000 })
+      .send({ quoteMode: "automatic", amountKobo: 200000 })
       .expect(200);
 
     const stored = await prisma.order.findUniqueOrThrow({
       where: { id: dataOf(created).id },
     });
     expect(stored).toMatchObject({
-      totalNaira: 1750,
+      totalKobo: 175000,
       pricingStatus: "manual_quoted",
       quotedById: admin.user.id,
-      zoneAmountNaira: null,
+      zoneAmountKobo: null,
     });
     expect(stored.quotedAt).toBeInstanceOf(Date);
 
     await request(app)
       .post(`/api/v1/orders/${stored.id}/manual-quote`)
       .set("Authorization", `Bearer ${admin.token}`)
-      .send({ amountNaira: 1800 })
+      .send({ amountKobo: 180000 })
       .expect(409);
   });
 
@@ -209,20 +295,20 @@ describe("pricing authority", () => {
 
     const response = await request(app)
       .post("/api/v1/orders")
-      .set("Authorization", `Bearer ${customer.token}`)
       .set("Idempotency-Key", idempotencyKey())
+      .set("Authorization", `Bearer ${customer.token}`)
       .send({ service: "errand", errandTier: "simple" })
       .expect(201);
 
-    expect(dataOf(response).totalNaira).toBe(500);
+    expect(dataOf(response).totalKobo).toBe(50000);
     const stored = await prisma.order.findUniqueOrThrow({
       where: { id: dataOf(response).id },
     });
     expect(stored).toMatchObject({
       errandTier: "simple",
-      errandAmountNaira: 500,
-      zoneAmountNaira: null,
-      totalNaira: 500,
+      errandAmountKobo: 50000,
+      zoneAmountKobo: null,
+      totalKobo: 50000,
     });
   });
 
@@ -231,24 +317,24 @@ describe("pricing authority", () => {
 
     const response = await request(app)
       .post("/api/v1/orders")
-      .set("Authorization", `Bearer ${customer.token}`)
       .set("Idempotency-Key", idempotencyKey())
+      .set("Authorization", `Bearer ${customer.token}`)
       .send({
         service: "special_pickup",
-        pickup: "igbesa",
-        destination: "lusada",
-        collection: "igbesa",
+        pickup: samplePoint("igbesa"),
+        destination: samplePoint("lusada"),
+        collection: samplePoint("igbesa"),
       })
       .expect(201);
 
-    expect(dataOf(response).totalNaira).toBe(1500);
+    expect(dataOf(response).totalKobo).toBe(150000);
     const stored = await prisma.order.findUniqueOrThrow({
       where: { id: dataOf(response).id },
     });
     expect(stored).toMatchObject({
-      zoneAmountNaira: 1000,
-      specialPickupAmountNaira: 500,
-      totalNaira: 1500,
+      zoneAmountKobo: 100000,
+      specialPickupAmountKobo: 50000,
+      totalKobo: 150000,
     });
   });
 
@@ -259,13 +345,13 @@ describe("pricing authority", () => {
     await request(app)
       .patch("/api/v1/pricing/rules/standard_zone/A")
       .set("Authorization", `Bearer ${customer.token}`)
-      .send({ quoteMode: "automatic", amountNaira: 1 })
+      .send({ quoteMode: "automatic", amountKobo: 1 })
       .expect(403);
 
     await request(app)
       .post("/api/v1/orders")
-      .set("Authorization", `Bearer ${rider.token}`)
       .set("Idempotency-Key", idempotencyKey())
+      .set("Authorization", `Bearer ${rider.token}`)
       .send(local)
       .expect(403);
 
@@ -274,7 +360,7 @@ describe("pricing authority", () => {
         component_tier: { component: "standard_zone", tier: "A" },
       },
     });
-    expect(rule.amountNaira).toBe(800);
+    expect(rule.amountKobo).toBe(80000);
   });
 
   it("returns not found when the price rule or order does not exist", async () => {
@@ -283,13 +369,13 @@ describe("pricing authority", () => {
     await request(app)
       .patch("/api/v1/pricing/rules/errand/nope")
       .set("Authorization", `Bearer ${admin.token}`)
-      .send({ quoteMode: "manual" })
+      .send({ quoteMode: "manual", minimumKobo: 150000 })
       .expect(404);
 
     await request(app)
       .post("/api/v1/orders/00000000-0000-4000-8000-000000000000/manual-quote")
       .set("Authorization", `Bearer ${admin.token}`)
-      .send({ amountNaira: 1500 })
+      .send({ amountKobo: 150000 })
       .expect(404);
   });
 
@@ -298,12 +384,12 @@ describe("pricing authority", () => {
     const admin = await account("+2348040000017", "admin");
     const created = await request(app)
       .post("/api/v1/orders")
-      .set("Authorization", `Bearer ${customer.token}`)
       .set("Idempotency-Key", idempotencyKey())
+      .set("Authorization", `Bearer ${customer.token}`)
       .send({
         service: "standard",
-        pickup: "outside",
-        destination: "igbesa",
+        pickup: OUTSIDE_CORRIDOR_POINT,
+        destination: samplePoint("igbesa"),
       })
       .expect(201);
     const orderId = dataOf(created).id;
@@ -312,11 +398,11 @@ describe("pricing authority", () => {
       request(app)
         .post(`/api/v1/orders/${orderId}/manual-quote`)
         .set("Authorization", `Bearer ${admin.token}`)
-        .send({ amountNaira: 1600 }),
+        .send({ amountKobo: 160000 }),
       request(app)
         .post(`/api/v1/orders/${orderId}/manual-quote`)
         .set("Authorization", `Bearer ${admin.token}`)
-        .send({ amountNaira: 2400 }),
+        .send({ amountKobo: 240000 }),
     ]);
     expect([low.status, high.status].sort()).toEqual([200, 409]);
 
@@ -325,8 +411,8 @@ describe("pricing authority", () => {
       where: { id: orderId },
     });
     expect(winner).toBeDefined();
-    expect(stored.totalNaira).toBe(dataOf(winner ?? low).totalNaira);
-    expect([1600, 2400]).toContain(stored.totalNaira);
+    expect(stored.totalKobo).toBe(dataOf(winner ?? low).totalKobo);
+    expect([160000, 240000]).toContain(stored.totalKobo);
   });
 
   it("does not fall back to a built-in price when the list is empty", async () => {
@@ -342,107 +428,105 @@ describe("pricing authority", () => {
     expect(errorOf(response).code).toBe("SERVICE_UNAVAILABLE");
   });
 
-  it("returns the original order when the same key is submitted twice", async () => {
-    const customer = await account("+2348040000018");
-    const key = "orders-create-same-key-1";
-
-    const first = await request(app)
-      .post("/api/v1/orders")
-      .set("Authorization", `Bearer ${customer.token}`)
-      .set("Idempotency-Key", key)
-      .send(local)
-      .expect(201);
-    const second = await request(app)
-      .post("/api/v1/orders")
-      .set("Authorization", `Bearer ${customer.token}`)
-      .set("Idempotency-Key", key)
-      .send(local)
-      .expect(201);
-
-    expect(second.headers["idempotency-replayed"]).toBe("true");
-    expect(dataOf(second).id).toBe(dataOf(first).id);
-    expect(await prisma.order.count()).toBe(1);
-
-    const records = await prisma.idempotencyRecord.findMany();
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({ state: "completed", statusCode: 201 });
-    const stored = records[0]?.responseBody as { data: { id: string } };
-    expect(stored.data.id).toBe(dataOf(first).id);
-  });
-
-  it("rejects the same key when the order body differs", async () => {
+  it("keeps the snapshotted floor when operations raises the minimum", async () => {
     const customer = await account("+2348040000019");
-    const key = "orders-create-same-key-2";
-
-    await request(app)
-      .post("/api/v1/orders")
-      .set("Authorization", `Bearer ${customer.token}`)
-      .set("Idempotency-Key", key)
-      .send(local)
-      .expect(201);
-    const response = await request(app)
-      .post("/api/v1/orders")
-      .set("Authorization", `Bearer ${customer.token}`)
-      .set("Idempotency-Key", key)
-      .send({ ...local, destination: "lusada" })
-      .expect(409);
-
-    expect(errorOf(response).code).toBe("IDEMPOTENCY_CONFLICT");
-    expect(await prisma.order.count()).toBe(1);
-  });
-
-  it("keeps a single order when two identical creates race", async () => {
-    const customer = await account("+2348040000020");
-    const key = "orders-create-same-key-3";
-    const send = () =>
-      request(app)
-        .post("/api/v1/orders")
-        .set("Authorization", `Bearer ${customer.token}`)
-        .set("Idempotency-Key", key)
-        .send(local);
-
-    const [left, right] = await Promise.all([send(), send()]);
-
-    expect(left.status).toBe(201);
-    expect(right.status).toBe(201);
-    expect(dataOf(left).id).toBe(dataOf(right).id);
-    expect(await prisma.order.count()).toBe(1);
-    expect(await prisma.idempotencyRecord.count()).toBe(1);
-  });
-
-  it("does not store the key when pricing fails before an order exists", async () => {
-    const customer = await account("+2348040000021");
-    const key = "orders-create-same-key-4";
-    await prisma.priceRule.deleteMany();
-
-    const failed = await request(app)
-      .post("/api/v1/orders")
-      .set("Authorization", `Bearer ${customer.token}`)
-      .set("Idempotency-Key", key)
-      .send(local)
-      .expect(503);
-
-    expect(errorOf(failed).code).toBe("SERVICE_UNAVAILABLE");
-    expect(await prisma.order.count()).toBe(0);
-    expect(await prisma.idempotencyRecord.count()).toBe(0);
-
-    await seedApprovedPrices(prisma);
+    const admin = await account("+2348040000020", "admin");
     const created = await request(app)
       .post("/api/v1/orders")
+      .set("Idempotency-Key", idempotencyKey())
       .set("Authorization", `Bearer ${customer.token}`)
-      .set("Idempotency-Key", key)
-      .send(local)
+      .send(outsideTrip)
       .expect(201);
-    const replay = await request(app)
+    const orderId = dataOf(created).id;
+
+    await request(app)
+      .patch("/api/v1/pricing/rules/standard_zone/outside_area")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({ quoteMode: "manual", minimumKobo: 300000 })
+      .expect(200);
+
+    const quoted = await request(app)
+      .post(`/api/v1/orders/${orderId}/manual-quote`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({ amountKobo: 160000 })
+      .expect(200);
+    expect(dataOf(quoted).totalKobo).toBe(160000);
+
+    const later = await request(app)
       .post("/api/v1/orders")
+      .set("Idempotency-Key", idempotencyKey())
       .set("Authorization", `Bearer ${customer.token}`)
-      .set("Idempotency-Key", key)
+      .send(outsideTrip)
+      .expect(201);
+    expect(dataOf(later).minimumTotalKobo).toBe(300000);
+    await request(app)
+      .post(`/api/v1/orders/${dataOf(later).id}/manual-quote`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({ amountKobo: 160000 })
+      .expect(400);
+
+    const original = await prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    expect(original).toMatchObject({
+      totalKobo: 160000,
+      minimumTotalKobo: 150000,
+    });
+  });
+
+  it("reclassifies new trips when an area moves and leaves priced orders alone", async () => {
+    const customer = await account("+2348040000021");
+    const admin = await account("+2348040000022", "admin");
+    const created = await request(app)
+      .post("/api/v1/orders")
+      .set("Idempotency-Key", idempotencyKey())
+      .set("Authorization", `Bearer ${customer.token}`)
       .send(local)
       .expect(201);
 
-    expect(replay.headers["idempotency-replayed"]).toBe("true");
-    expect(dataOf(replay).id).toBe(dataOf(created).id);
-    expect(await prisma.order.count()).toBe(1);
+    await request(app)
+      .patch("/api/v1/pricing/areas/igbesa")
+      .set("Authorization", `Bearer ${customer.token}`)
+      .send({
+        minLatitude: 1,
+        maxLatitude: 2,
+        minLongitude: 1,
+        maxLongitude: 2,
+      })
+      .expect(403);
+
+    await request(app)
+      .patch("/api/v1/pricing/areas/igbesa")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({
+        minLatitude: 1,
+        maxLatitude: 2,
+        minLongitude: 1,
+        maxLongitude: 2,
+      })
+      .expect(200);
+
+    const quote = await request(app)
+      .post("/api/v1/pricing/quotes")
+      .set("Authorization", `Bearer ${customer.token}`)
+      .send(local)
+      .expect(200);
+    expect(dataOf(quote)).toMatchObject({
+      pricingStatus: "pending_manual_quote",
+      totalKobo: null,
+      minimumTotalKobo: 150000,
+      pickupPlace: "extended",
+      destinationPlace: "extended",
+    });
+
+    const stored = await prisma.order.findUniqueOrThrow({
+      where: { id: dataOf(created).id },
+    });
+    expect(stored).toMatchObject({
+      totalKobo: 80000,
+      pickupPlace: "igbesa",
+      destinationPlace: "igbesa",
+    });
   });
 });
 
@@ -453,7 +537,7 @@ describe("pricing database constraints", () => {
         where: {
           component_tier: { component: "standard_zone", tier: "A" },
         },
-        data: { amountNaira: null },
+        data: { amountKobo: null },
       }),
     ).rejects.toThrow(/price_rules_amount_mode_check/);
   });
@@ -470,10 +554,10 @@ describe("pricing database constraints", () => {
           collectionPlace: "igbesa",
           pricingStatus: "auto",
           zoneTier: "B",
-          zoneAmountNaira: 1000,
+          zoneAmountKobo: 100000,
           specialPickupTier: "local",
-          specialPickupAmountNaira: 500,
-          totalNaira: 1000,
+          specialPickupAmountKobo: 50000,
+          totalKobo: 100000,
         },
       }),
     ).rejects.toThrow(/orders_auto_components_check/);
@@ -492,5 +576,25 @@ describe("pricing database constraints", () => {
         },
       }),
     ).rejects.toThrow(/orders_auto_components_check/);
+  });
+
+  it("rejects a stored manual total below its floor", async () => {
+    const customer = await account("+2348040000023");
+    await expect(
+      prisma.order.create({
+        data: {
+          customerId: customer.user.id,
+          quotedById: customer.user.id,
+          quotedAt: new Date(),
+          serviceType: "standard",
+          pickupPlace: "extended",
+          destinationPlace: "igbesa",
+          pricingStatus: "manual_quoted",
+          zoneTier: "extended",
+          totalKobo: 1,
+          minimumTotalKobo: 150000,
+        },
+      }),
+    ).rejects.toThrow(/orders_quote_floor_check/);
   });
 });

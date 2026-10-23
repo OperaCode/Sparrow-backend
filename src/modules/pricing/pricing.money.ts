@@ -1,22 +1,22 @@
 import {
-  MAX_AMOUNT_NAIRA,
+  MAX_AMOUNT_KOBO,
   PRICING_COMPONENTS,
   type PriceComponentQuote,
-} from "./pricing.types.js";
+} from './pricing.types.js';
 
 /** The price list or a stored snapshot cannot be charged safely. */
 export class PricingConfigurationError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "PricingConfigurationError";
+    this.name = 'PricingConfigurationError';
   }
 }
 
-const MAX_TOTAL_NAIRA = MAX_AMOUNT_NAIRA * PRICING_COMPONENTS.length;
+const MAX_TOTAL_KOBO = MAX_AMOUNT_KOBO * PRICING_COMPONENTS.length;
 
-export function isChargeableNaira(amount: number): boolean {
+export function isChargeableKobo(amount: number): boolean {
   return (
-    Number.isSafeInteger(amount) && amount > 0 && amount <= MAX_AMOUNT_NAIRA
+    Number.isSafeInteger(amount) && amount > 0 && amount <= MAX_AMOUNT_KOBO
   );
 }
 
@@ -24,30 +24,30 @@ export function isChargeableNaira(amount: number): boolean {
  * A missing, fractional, negative, or huge figure is never treated as zero.
  * Zero would drop a leg from the bill.
  */
-export function assertPositiveNaira(
+export function assertPositiveKobo(
   amount: number | null,
   label: string,
 ): number {
-  if (amount === null || !isChargeableNaira(amount)) {
+  if (amount === null || !isChargeableKobo(amount)) {
     throw new PricingConfigurationError(
-      `${label} is not a chargeable amount in naira`,
+      `${label} is not a chargeable amount in kobo`,
     );
   }
   return amount;
 }
 
 function legAmount(component: PriceComponentQuote): number | null {
-  const amount = component.amountNaira;
-  const manualWithAmount = component.quoteMode === "manual" && amount !== null;
+  const amount = component.amountKobo;
+  const manualWithAmount = component.quoteMode === 'manual' && amount !== null;
   const automaticWithoutAmount =
-    component.quoteMode === "automatic" && amount === null;
+    component.quoteMode === 'automatic' && amount === null;
   if (manualWithAmount || automaticWithoutAmount) {
     throw new PricingConfigurationError(
       `${component.component} amount does not match its quote mode`,
     );
   }
-  if (component.quoteMode === "manual") return null;
-  return assertPositiveNaira(amount, component.component);
+  if (component.quoteMode === 'manual') return null;
+  return assertPositiveKobo(amount, component.component);
 }
 
 /**
@@ -59,7 +59,7 @@ export function amountDue(
   components: readonly PriceComponentQuote[],
 ): number | null {
   if (components.length === 0) {
-    throw new PricingConfigurationError("A quote needs at least one component");
+    throw new PricingConfigurationError('A quote needs at least one component');
   }
 
   const byLeg = new Map(
@@ -69,7 +69,7 @@ export function amountDue(
   );
   if (byLeg.size !== components.length) {
     throw new PricingConfigurationError(
-      "A quote has two amounts for the same leg",
+      'A quote has two amounts for the same leg',
     );
   }
 
@@ -79,9 +79,14 @@ export function amountDue(
   );
   if (charges.length !== amounts.length) return null;
 
-  const total = charges.reduce((sum, amount) => sum + amount, 0);
-  if (total > MAX_TOTAL_NAIRA) {
-    throw new PricingConfigurationError("Quote total exceeds the charge limit");
+  return sumWithinChargeLimit(charges);
+}
+
+/** A summed charge or floor. Callers pass one already-validated amount per leg. */
+export function sumWithinChargeLimit(amounts: readonly number[]): number {
+  const total = amounts.reduce((sum, amount) => sum + amount, 0);
+  if (total > MAX_TOTAL_KOBO) {
+    throw new PricingConfigurationError('Quote total exceeds the charge limit');
   }
   return total;
 }

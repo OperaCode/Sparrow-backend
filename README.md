@@ -117,7 +117,12 @@ Client endpoints live under `/api/v1`. Additive changes stay in v1. A breaking c
 A feature module registers itself in `src/api/v1/modules.ts`:
 
 ```ts
-export const v1Modules: readonly V1Module[] = [deliveriesModule];
+export function createV1Modules(deps: {
+  prisma: PrismaClient;
+  logger: Logger;
+}): readonly V1Module[] {
+  return createPricingModules(deps);
+}
 ```
 
 ### Response envelope
@@ -200,6 +205,7 @@ Privileged writes record an `audit_events` row in the same transaction as the ch
 | `user.status.update`  | An admin changes someone else's status   |
 | `user.role.update`    | An admin changes someone else's role     |
 | `pricing.rule.update` | An admin edits a price rule              |
+| `pricing.area.update` | An admin edits a service-area box        |
 | `order.manual_quote`  | An admin sets the amount due on an order |
 
 A customer's own profile edit or deactivation is not an admin action and is not audited. A refused change, such as a second manual quote, writes nothing.

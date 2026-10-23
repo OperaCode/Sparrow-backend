@@ -1,9 +1,11 @@
-import { classifySpecialPickup, classifyZone } from "./pricing.classify.js";
+import { classifySpecialPickup, classifyZone } from './pricing.classify.js';
 import {
   PricingConfigurationError,
   amountDue,
-  assertPositiveNaira,
-} from "./pricing.money.js";
+  assertPositiveKobo,
+  isChargeableKobo,
+  sumWithinChargeLimit,
+} from './pricing.money.js';
 import {
   CURRENCY,
   type ErrandTier,
@@ -16,15 +18,15 @@ import {
   type QuoteMode,
   type SpecialPickupTier,
   type ZoneTier,
-} from "./pricing.types.js";
+} from './pricing.types.js';
 
-export { PricingConfigurationError } from "./pricing.money.js";
+export { PricingConfigurationError } from './pricing.money.js';
 
 /** The request names an errand delivery with only one end. */
 export class InvalidQuoteInputError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "InvalidQuoteInputError";
+    this.name = 'InvalidQuoteInputError';
   }
 }
 
@@ -37,7 +39,7 @@ function indexRules(rules: readonly PriceRuleRecord[]): RuleIndex {
   );
   if (byTier.size !== rules.length) {
     throw new PricingConfigurationError(
-      "The price list has two amounts for the same tier",
+      'The price list has two amounts for the same tier',
     );
   }
   return byTier;
@@ -61,31 +63,37 @@ function money(
   component: PricingComponent,
   tier: string,
   byTier: RuleIndex,
-): { quoteMode: QuoteMode; amountNaira: number | null } {
+): { quoteMode: QuoteMode; amountKobo: number | null } {
   const rule = findRule(byTier, component, tier);
-  const manualWithAmount =
-    rule.quoteMode === "manual" && rule.amountNaira !== null;
-  const automaticWithoutAmount =
-    rule.quoteMode === "automatic" && rule.amountNaira === null;
-  if (manualWithAmount || automaticWithoutAmount) {
+  if (rule.quoteMode === 'manual') {
+    const minimum = rule.minimumKobo;
+    if (
+      rule.amountKobo !== null ||
+      minimum === null ||
+      !isChargeableKobo(minimum)
+    ) {
+      throw new PricingConfigurationError(
+        `${component}/${tier} breaks the automatic/manual amount rule`,
+      );
+    }
+    return { quoteMode: 'manual', amountKobo: null };
+  }
+  if (rule.amountKobo === null || rule.minimumKobo !== null) {
     throw new PricingConfigurationError(
       `${component}/${tier} breaks the automatic/manual amount rule`,
     );
   }
-  if (rule.quoteMode === "manual") {
-    return { quoteMode: "manual", amountNaira: null };
-  }
   return {
-    quoteMode: "automatic",
-    amountNaira: assertPositiveNaira(rule.amountNaira, `${component}/${tier}`),
+    quoteMode: 'automatic',
+    amountKobo: assertPositiveKobo(rule.amountKobo, `${component}/${tier}`),
   };
 }
 
 function zoneQuote(tier: ZoneTier, byTier: RuleIndex): PriceComponentQuote {
   return {
-    component: "standard_zone",
+    component: 'standard_zone',
     tier,
-    ...money("standard_zone", tier, byTier),
+    ...money('standard_zone', tier, byTier),
   };
 }
 
@@ -94,14 +102,14 @@ function specialPickupQuote(
   byTier: RuleIndex,
 ): PriceComponentQuote {
   return {
-    component: "special_pickup",
+    component: 'special_pickup',
     tier,
-    ...money("special_pickup", tier, byTier),
+    ...money('special_pickup', tier, byTier),
   };
 }
 
 function errandQuote(tier: ErrandTier, byTier: RuleIndex): PriceComponentQuote {
-  return { component: "errand", tier, ...money("errand", tier, byTier) };
+  return { component: 'errand', tier, ...money('errand', tier, byTier) };
 }
 
 function optionalZone(
@@ -113,7 +121,7 @@ function optionalZone(
   const missingDestination = destination === undefined;
   if (missingPickup !== missingDestination) {
     throw new InvalidQuoteInputError(
-      "Pickup and destination are both required when an errand includes delivery",
+      'Pickup and destination are both required when an errand includes delivery',
     );
   }
   if (pickup === undefined || destination === undefined) return undefined;
@@ -125,9 +133,9 @@ function componentsFor(
   byTier: RuleIndex,
 ): PriceComponentQuote[] {
   switch (input.service) {
-    case "standard":
+    case 'standard':
       return [zoneQuote(classifyZone(input.pickup, input.destination), byTier)];
-    case "special_pickup":
+    case 'special_pickup':
       return [
         zoneQuote(classifyZone(input.pickup, input.destination), byTier),
         specialPickupQuote(
@@ -135,7 +143,7 @@ function componentsFor(
           byTier,
         ),
       ];
-    case "errand": {
+    case 'errand': {
       const zone = optionalZone(input.pickup, input.destination, byTier);
       const task = errandQuote(input.errandTier, byTier);
       return zone === undefined ? [task] : [task, zone];
@@ -143,13 +151,56 @@ function componentsFor(
   }
 }
 
-function finish(components: PriceComponentQuote[]): PriceQuote {
-  const totalNaira = amountDue(components);
+/**
+ * The manual quote is the whole amount due, so the floor is every automatic
+ * leg plus every manual leg's minimum. A later edit to the price list does
+ * not change a floor already copied onto the order.
+ */
+function manualFloor(
+  components: readonly PriceComponentQuote[],
+  byTier: RuleIndex,
+): number {
+  const parts = components.map((component) => {
+    if (component.quoteMode === 'automatic') {
+      return assertPositiveKobo(component.amountKobo, component.component);
+    }
+    const rule = findRule(byTier, component.component, component.tier);
+    return assertPositiveKobo(
+      rule.minimumKobo,
+      `${component.component}/${component.tier} minimum`,
+    );
+  });
+  return sumWithinChargeLimit(parts);
+}
+
+function placesOf(input: QuoteInput): {
+  pickupPlace: Place | null;
+  destinationPlace: Place | null;
+  collectionPlace: Place | null;
+} {
   return {
-    pricingStatus: totalNaira === null ? "pending_manual_quote" : "auto",
+    pickupPlace: 'pickup' in input ? (input.pickup ?? null) : null,
+    destinationPlace:
+      'destination' in input ? (input.destination ?? null) : null,
+    collectionPlace:
+      input.service === 'special_pickup' ? input.collection : null,
+  };
+}
+
+function finish(
+  input: QuoteInput,
+  components: PriceComponentQuote[],
+  byTier: RuleIndex,
+): PriceQuote {
+  const totalKobo = amountDue(components);
+  return {
+    pricingStatus: totalKobo === null ? 'pending_manual_quote' : 'auto',
     currency: CURRENCY,
     components,
-    totalNaira,
+    totalKobo,
+    minimumTotalKobo:
+      totalKobo === null ? manualFloor(components, byTier) : null,
+    ...placesOf(input),
   };
 }
 
@@ -162,5 +213,6 @@ export function calculatePrice(
   input: QuoteInput,
   rules: readonly PriceRuleRecord[],
 ): PriceQuote {
-  return finish(componentsFor(input, indexRules(rules)));
+  const byTier = indexRules(rules);
+  return finish(input, componentsFor(input, byTier), byTier);
 }

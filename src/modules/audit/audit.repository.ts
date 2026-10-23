@@ -5,12 +5,13 @@ export const AUDIT_ACTIONS = [
   "user.status.update",
   "user.role.update",
   "pricing.rule.update",
+  "pricing.area.update",
   "order.manual_quote",
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
-export type AuditTargetType = "user" | "price_rule" | "order";
+export type AuditTargetType = "user" | "price_rule" | "service_area" | "order";
 
 /** Flat values only, so a nested token or receipt cannot land in the trail. */
 export type AuditValue = string | number | boolean | null;
