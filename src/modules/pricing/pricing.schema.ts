@@ -1,11 +1,11 @@
-import { z } from 'zod';
+import { z } from "zod";
 import {
   ERRAND_TIERS,
   MAX_AMOUNT_NAIRA,
   PLACES,
   PRICING_COMPONENTS,
   QUOTE_MODES,
-} from './pricing.types.js';
+} from "./pricing.types.js";
 
 const placeSchema = z.enum(PLACES);
 const amountSchema = z.number().int().positive().max(MAX_AMOUNT_NAIRA);
@@ -15,33 +15,33 @@ const amountSchema = z.number().int().positive().max(MAX_AMOUNT_NAIRA);
  * rather than ignored, so it cannot become the amount due.
  */
 export const quoteBodySchema = z
-  .discriminatedUnion('service', [
+  .discriminatedUnion("service", [
     z.strictObject({
-      service: z.literal('standard'),
+      service: z.literal("standard"),
       pickup: placeSchema,
       destination: placeSchema,
     }),
     z.strictObject({
-      service: z.literal('special_pickup'),
+      service: z.literal("special_pickup"),
       pickup: placeSchema,
       destination: placeSchema,
       collection: placeSchema,
     }),
     z.strictObject({
-      service: z.literal('errand'),
+      service: z.literal("errand"),
       errandTier: z.enum(ERRAND_TIERS),
       pickup: placeSchema.optional(),
       destination: placeSchema.optional(),
     }),
   ])
   .superRefine((value, ctx) => {
-    if (value.service !== 'errand') return;
+    if (value.service !== "errand") return;
     if ((value.pickup === undefined) !== (value.destination === undefined)) {
       ctx.addIssue({
-        code: 'custom',
+        code: "custom",
         message:
-          'Pickup and destination are both required when an errand includes delivery',
-        path: ['destination'],
+          "Pickup and destination are both required when an errand includes delivery",
+        path: ["destination"],
       });
     }
   });
@@ -52,25 +52,25 @@ export const updateRuleBodySchema = z
     amountNaira: amountSchema.optional(),
   })
   .superRefine((value, ctx) => {
-    if (value.quoteMode === 'automatic' && value.amountNaira === undefined) {
+    if (value.quoteMode === "automatic" && value.amountNaira === undefined) {
       ctx.addIssue({
-        code: 'custom',
-        message: 'An automatic price requires an amount',
-        path: ['amountNaira'],
+        code: "custom",
+        message: "An automatic price requires an amount",
+        path: ["amountNaira"],
       });
     }
-    if (value.quoteMode === 'manual' && value.amountNaira !== undefined) {
+    if (value.quoteMode === "manual" && value.amountNaira !== undefined) {
       ctx.addIssue({
-        code: 'custom',
-        message: 'A manual tier cannot carry an automatic amount',
-        path: ['amountNaira'],
+        code: "custom",
+        message: "A manual tier cannot carry an automatic amount",
+        path: ["amountNaira"],
       });
     }
   })
   .transform((value) => ({
     quoteMode: value.quoteMode,
     amountNaira:
-      value.quoteMode === 'automatic' ? (value.amountNaira ?? null) : null,
+      value.quoteMode === "automatic" ? (value.amountNaira ?? null) : null,
   }));
 
 export const manualQuoteBodySchema = z.strictObject({

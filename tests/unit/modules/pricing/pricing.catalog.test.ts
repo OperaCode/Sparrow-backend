@@ -4,13 +4,13 @@ import { describe, expect, it } from 'vitest';
 import {
   APPROVED_PRICE_RULES,
   priceRuleSqlTuple,
-} from '../../../../src/modules/pricing/pricing.catalog.js';
+} from '#src/modules/pricing/pricing.catalog.js';
 import {
   ERRAND_TIERS,
   SPECIAL_PICKUP_TIERS,
   ZONE_TIERS,
   type PricingComponent,
-} from '../../../../src/modules/pricing/pricing.types.js';
+} from '#src/modules/pricing/pricing.types.js';
 
 const approvedByTier = new Map(
   APPROVED_PRICE_RULES.map(

@@ -1,6 +1,7 @@
-import type { RequestHandler } from 'express';
-import type { AccountStatus, Role } from '../../types/auth.js';
-import { checkAccountStatus, UnauthorizedError } from '../errors.js';
+import type { Request, RequestHandler } from "express";
+import type { AccountStatus, AuditActor, Role } from "../../types/auth.js";
+import { checkAccountStatus, UnauthorizedError } from "../errors.js";
+import { getRequestId } from "./request-id.js";
 
 export interface TokenVerifier {
   verify(token: string): Promise<{ userId: string }>;
@@ -37,7 +38,7 @@ export function createAuthenticate(
   deps: AuthenticateDependencies,
 ): RequestHandler {
   return async (req, _res, next) => {
-    const token = extractBearerToken(req.get('Authorization'));
+    const token = extractBearerToken(req.get("Authorization"));
     const { userId } = await deps.verifier.verify(token);
 
     const subject = await deps.subjects.findAuthSubjectById(userId);
@@ -49,4 +50,10 @@ export function createAuthenticate(
     req.auth = { userId: subject.id, role: subject.role };
     next();
   };
+}
+
+/** Identity plus the request id stored on a privileged audit row. */
+export function auditActor(req: Request): AuditActor {
+  if (req.auth === undefined) throw new UnauthorizedError();
+  return { actorId: req.auth.userId, requestId: getRequestId(req) };
 }

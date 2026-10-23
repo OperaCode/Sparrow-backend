@@ -1,19 +1,21 @@
-import type { AccountStatus } from '../types/auth.js';
+import type { AccountStatus } from "../types/auth.js";
 
 export type ErrorCode =
-  | 'VALIDATION_ERROR'
-  | 'INVALID_JSON'
-  | 'BAD_REQUEST'
-  | 'UNAUTHENTICATED'
-  | 'FORBIDDEN'
-  | 'ACCOUNT_SUSPENDED'
-  | 'ACCOUNT_DEACTIVATED'
-  | 'NOT_FOUND'
-  | 'CONFLICT'
-  | 'PAYLOAD_TOO_LARGE'
-  | 'RATE_LIMITED'
-  | 'SERVICE_UNAVAILABLE'
-  | 'INTERNAL_ERROR';
+  | "VALIDATION_ERROR"
+  | "INVALID_JSON"
+  | "BAD_REQUEST"
+  | "UNAUTHENTICATED"
+  | "FORBIDDEN"
+  | "ACCOUNT_SUSPENDED"
+  | "ACCOUNT_DEACTIVATED"
+  | "NOT_FOUND"
+  | "CONFLICT"
+  | "IDEMPOTENCY_CONFLICT"
+  | "IDEMPOTENCY_IN_PROGRESS"
+  | "PAYLOAD_TOO_LARGE"
+  | "RATE_LIMITED"
+  | "SERVICE_UNAVAILABLE"
+  | "INTERNAL_ERROR";
 
 export interface ErrorDetail {
   path: string;
@@ -51,26 +53,26 @@ export class AppError extends Error {
 
 export class ValidationError extends AppError {
   constructor(details: readonly ErrorDetail[]) {
-    super(400, 'VALIDATION_ERROR', 'Request validation failed', { details });
+    super(400, "VALIDATION_ERROR", "Request validation failed", { details });
   }
 }
 
 export class BadRequestError extends AppError {
-  constructor(message = 'Bad request', code: ErrorCode = 'BAD_REQUEST') {
+  constructor(message = "Bad request", code: ErrorCode = "BAD_REQUEST") {
     super(400, code, message);
   }
 }
 
 export class UnauthorizedError extends AppError {
-  constructor(message = 'Authentication required') {
-    super(401, 'UNAUTHENTICATED', message);
+  constructor(message = "Authentication required") {
+    super(401, "UNAUTHENTICATED", message);
   }
 }
 
 export class ForbiddenError extends AppError {
   constructor(
-    message = 'You do not have permission to perform this action',
-    code: ErrorCode = 'FORBIDDEN',
+    message = "You do not have permission to perform this action",
+    code: ErrorCode = "FORBIDDEN",
   ) {
     super(403, code, message);
   }
@@ -82,15 +84,15 @@ const INACTIVE_ACCOUNT = new Map<
 >(
   Object.entries({
     suspended: {
-      message: 'This account is suspended',
-      code: 'ACCOUNT_SUSPENDED',
+      message: "This account is suspended",
+      code: "ACCOUNT_SUSPENDED",
     },
     deactivated: {
-      message: 'This account is deactivated',
-      code: 'ACCOUNT_DEACTIVATED',
+      message: "This account is deactivated",
+      code: "ACCOUNT_DEACTIVATED",
     },
   } as const satisfies Record<
-    Exclude<AccountStatus, 'active'>,
+    Exclude<AccountStatus, "active">,
     { readonly message: string; readonly code: ErrorCode }
   >),
 );
@@ -104,26 +106,34 @@ export function checkAccountStatus(status: AccountStatus): void {
   if (refusal !== undefined) {
     throw new ForbiddenError(refusal.message, refusal.code);
   }
-  if (status !== 'active') {
+  if (status !== "active") {
     throw new Error(`Unhandled account status ${JSON.stringify(status)}`);
   }
 }
 
 export class NotFoundError extends AppError {
-  constructor(message = 'Resource not found') {
-    super(404, 'NOT_FOUND', message);
+  constructor(message = "Resource not found") {
+    super(404, "NOT_FOUND", message);
   }
 }
 
+type ConflictCode = Extract<
+  ErrorCode,
+  "CONFLICT" | "IDEMPOTENCY_CONFLICT" | "IDEMPOTENCY_IN_PROGRESS"
+>;
+
 export class ConflictError extends AppError {
-  constructor(message = 'Resource already exists') {
-    super(409, 'CONFLICT', message);
+  constructor(
+    message = "Resource already exists",
+    code: ConflictCode = "CONFLICT",
+  ) {
+    super(409, code, message);
   }
 }
 
 export class PayloadTooLargeError extends AppError {
-  constructor(message = 'Request body is too large') {
-    super(413, 'PAYLOAD_TOO_LARGE', message);
+  constructor(message = "Request body is too large") {
+    super(413, "PAYLOAD_TOO_LARGE", message);
   }
 }
 
@@ -131,13 +141,13 @@ export class RateLimitError extends AppError {
   readonly retryAfterSeconds: number;
 
   constructor(retryAfterSeconds: number) {
-    super(429, 'RATE_LIMITED', 'Too many requests, please try again later');
+    super(429, "RATE_LIMITED", "Too many requests, please try again later");
     this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
 export class ServiceUnavailableError extends AppError {
-  constructor(message = 'Service temporarily unavailable') {
-    super(503, 'SERVICE_UNAVAILABLE', message);
+  constructor(message = "Service temporarily unavailable") {
+    super(503, "SERVICE_UNAVAILABLE", message);
   }
 }

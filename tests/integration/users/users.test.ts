@@ -1,10 +1,10 @@
 import request, { type Response } from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { createLogger } from '../../../src/lib/logger.js';
-import { createPricingModules } from '../../../src/modules/pricing/pricing.module.js';
-import { createUsersModules } from '../../../src/modules/users/users.module.js';
-import { createUsersRepository } from '../../../src/modules/users/users.repository.js';
-import { createUsersService } from '../../../src/modules/users/users.service.js';
+import { createLogger } from '#src/lib/logger.js';
+import { createPricingModules } from '#src/modules/pricing/pricing.module.js';
+import { createUsersModules } from '#src/modules/users/users.module.js';
+import { createUsersRepository } from '#src/modules/users/users.repository.js';
+import { createUsersService } from '#src/modules/users/users.service.js';
 import { buildTestApp, testConfig, tokenFor } from '../../helpers/app.js';
 import { createTestPrisma, truncateAllTables } from '../../helpers/database.js';
 import { errorOf } from '../../helpers/http.js';

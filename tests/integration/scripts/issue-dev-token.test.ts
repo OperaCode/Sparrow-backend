@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { createAccessTokenVerifier } from '../../../src/modules/auth/access-token.service.js';
+import { createAccessTokenVerifier } from '#src/modules/auth/access-token.service.js';
 import { testConfig, TEST_JWT_SECRET } from '../../helpers/app.js';
 import {
   createTestPrisma,

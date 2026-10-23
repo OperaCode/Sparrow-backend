@@ -1,4 +1,4 @@
-import type { Place, SpecialPickupTier, ZoneTier } from './pricing.types.js';
+import type { Place, SpecialPickupTier, ZoneTier } from "./pricing.types.js";
 
 /**
  * Same community is Zone A, including Ketu to Ketu. Igbesa and Lusada are
@@ -7,11 +7,11 @@ import type { Place, SpecialPickupTier, ZoneTier } from './pricing.types.js';
  * not on the standard price list.
  */
 export function classifyZone(pickup: Place, destination: Place): ZoneTier {
-  if (pickup === 'outside' || destination === 'outside') return 'outside_area';
-  if (pickup === 'extended' || destination === 'extended') return 'extended';
-  if (pickup === destination) return 'A';
-  if (pickup === 'ketu' || destination === 'ketu') return 'C';
-  return 'B';
+  if (pickup === "outside" || destination === "outside") return "outside_area";
+  if (pickup === "extended" || destination === "extended") return "extended";
+  if (pickup === destination) return "A";
+  if (pickup === "ketu" || destination === "ketu") return "C";
+  return "B";
 }
 
 /**
@@ -24,8 +24,8 @@ export function classifySpecialPickup(
   collection: Place,
 ): SpecialPickupTier {
   const zone = classifyZone(pickup, collection);
-  if (zone === 'A') return 'local';
-  if (zone === 'B') return 'nearby';
-  if (zone === 'outside_area') return 'outside_area';
-  return 'extended';
+  if (zone === "A") return "local";
+  if (zone === "B") return "nearby";
+  if (zone === "outside_area") return "outside_area";
+  return "extended";
 }

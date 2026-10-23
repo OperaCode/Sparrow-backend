@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
-import type { AuthSubjectLookup } from '../../../src/http/middleware/authenticate.js';
-import type { AccountStatus, Role } from '../../../src/types/auth.js';
+import type { AuthSubjectLookup } from '#src/http/middleware/authenticate.js';
+import type { AccountStatus, Role } from '#src/types/auth.js';
 import {
   buildTestApp,
   protectedTestModule,

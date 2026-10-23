@@ -131,7 +131,7 @@ Success:
 }
 ```
 
-`meta` is present only when there is something to put in it. Use `sendData(res, data, { status, meta })`.
+`meta` is present only when there is something to put in it. A list always sends `meta` as `{ "limit", "nextCursor" }`, and `nextCursor` is `null` on the last page. Use `sendData(res, data, { status, meta })`.
 
 Error:
 
@@ -148,27 +148,61 @@ Error:
 
 `details` appears on validation errors only. Every response carries an `X-Request-Id` header that matches the `requestId` in logs and error bodies.
 
-| Status | Code                  | When                                                    |
-| ------ | --------------------- | ------------------------------------------------------- |
-| 400    | `VALIDATION_ERROR`    | Params, query or body failed schema validation          |
-| 400    | `INVALID_JSON`        | Malformed JSON body                                     |
-| 400    | `BAD_REQUEST`         | Other malformed requests                                |
-| 401    | `UNAUTHENTICATED`     | Missing, invalid or expired token, or unknown user      |
-| 403    | `FORBIDDEN`           | Authenticated but not allowed                           |
-| 403    | `ACCOUNT_SUSPENDED`   | User is suspended                                       |
-| 403    | `ACCOUNT_DEACTIVATED` | User is deactivated                                     |
-| 404    | `NOT_FOUND`           | Unknown route or resource                               |
-| 409    | `CONFLICT`            | Uniqueness or state conflict                            |
-| 413    | `PAYLOAD_TOO_LARGE`   | JSON body over 100 kB                                   |
-| 429    | `RATE_LIMITED`        | Rate limit exceeded; see `Retry-After`                  |
-| 503    | `SERVICE_UNAVAILABLE` | A dependency is down (readiness)                        |
-| 500    | `INTERNAL_ERROR`      | Anything unexpected; details are logged, never returned |
+| Status | Code                      | When                                                    |
+| ------ | ------------------------- | ------------------------------------------------------- |
+| 400    | `VALIDATION_ERROR`        | Params, query or body failed schema validation          |
+| 400    | `INVALID_JSON`            | Malformed JSON body                                     |
+| 400    | `BAD_REQUEST`             | Other malformed requests                                |
+| 401    | `UNAUTHENTICATED`         | Missing, invalid or expired token, or unknown user      |
+| 403    | `FORBIDDEN`               | Authenticated but not allowed                           |
+| 403    | `ACCOUNT_SUSPENDED`       | User is suspended                                       |
+| 403    | `ACCOUNT_DEACTIVATED`     | User is deactivated                                     |
+| 404    | `NOT_FOUND`               | Unknown route or resource                               |
+| 409    | `CONFLICT`                | Uniqueness or state conflict                            |
+| 409    | `IDEMPOTENCY_CONFLICT`    | Same idempotency key, different request                 |
+| 409    | `IDEMPOTENCY_IN_PROGRESS` | That idempotency key is still running                   |
+| 413    | `PAYLOAD_TOO_LARGE`       | JSON body over 100 kB                                   |
+| 429    | `RATE_LIMITED`            | Rate limit exceeded; see `Retry-After`                  |
+| 503    | `SERVICE_UNAVAILABLE`     | A dependency is down (readiness)                        |
+| 500    | `INTERNAL_ERROR`          | Anything unexpected; details are logged, never returned |
 
 Throw the typed errors from `src/http/errors.ts`. Anything else becomes a generic 500.
 
 ### Validation
 
-Validate every input at the boundary with `validate({ params, query, body })`. Handlers receive the parsed output. Use `z.strictObject` for bodies so unknown fields, such as a client-sent price or role, are rejected rather than ignored.
+Validate every input at the boundary with `validate({ params, query, body })`. Handlers receive the parsed output. Use `z.strictObject` for bodies so unknown fields, such as a client-sent price or role, are rejected rather than ignored. Validation details are sorted by `path`, then `message`, so the same payload always produces the same `details` array.
+
+### Pagination and filtering
+
+List endpoints take a cursor page. The query schema is `listQuerySchema({ ...filters })`.
+
+| Query           | Rule                                                                                                           |
+| --------------- | -------------------------------------------------------------------------------------------------------------- |
+| `limit`         | Integer from 1 to 100. Default 20.                                                                             |
+| `cursor`        | Opaque token from the previous `meta.nextCursor`. Invalid tokens are `VALIDATION_ERROR`.                       |
+| Resource fields | Exact match only, declared on that schema. An unknown key, including `sort`, `page`, or `offset`, is rejected. |
+
+Order is fixed: `createdAt` descending, then `id` descending. `createdAtPage` turns the parsed query into `{ limit, cursor }`. The repository fetches `limit + 1` rows, using `(createdAt, id) < (cursor.createdAt, cursor.id)` when a cursor is present, and passes them to `slicePage`. The extra row is not returned; it is what makes `nextCursor` non-null. `pageMeta(limit, nextCursor)` is the `meta` object.
+
+### Idempotency
+
+`POST /api/v1/orders` and any later route that creates an order or records a payment require `Idempotency-Key`. The key is 16 to 128 characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`. A UUID is the usual choice. The key is scoped to the signed-in user and the operation (`orders.create`, and `payments.record` when that route exists), so one key cannot replay a different action.
+
+Mount `idempotency('<scope>')` after `authenticate` and `validate`. A payload that fails validation does not consume the key, so the client can correct it and retry. The first finished response below 500 is stored and replayed, including a conflict, with `Idempotency-Replayed: true`. The same key with a different body is `409 IDEMPOTENCY_CONFLICT`. A second request that arrives while the first is still running is `409 IDEMPOTENCY_IN_PROGRESS`. A 500 does not store a response; the key is released and the client may retry. A lock still marked in progress after 60 seconds is taken over, which is longer than the 30 second request timeout.
+
+### Audit
+
+Privileged writes record an `audit_events` row in the same transaction as the change. The row stores the actor, the action, the target type and id, the request id, and a flat metadata object. Metadata holds the decision (`from` / `to`, the amount), not a phone, name, token, or receipt.
+
+| Action                | When                                     |
+| --------------------- | ---------------------------------------- |
+| `user.provision`      | An admin creates an account              |
+| `user.status.update`  | An admin changes someone else's status   |
+| `user.role.update`    | An admin changes someone else's role     |
+| `pricing.rule.update` | An admin edits a price rule              |
+| `order.manual_quote`  | An admin sets the amount due on an order |
+
+A customer's own profile edit or deactivation is not an admin action and is not audited. A refused change, such as a second manual quote, writes nothing.
 
 ## Health checks
 
@@ -189,13 +223,13 @@ Protecting a route inside a module:
 
 ```ts
 export const ridersModule: V1Module = {
-  path: '/riders',
+  path: "/riders",
   createRouter({ authenticate, requireRole }) {
     const router = Router();
     router.get(
-      '/',
+      "/",
       authenticate,
-      requireRole('admin'),
+      requireRole("admin"),
       validate({ query: listRidersQuery }),
       controller.list,
     );
@@ -204,7 +238,20 @@ export const ridersModule: V1Module = {
 };
 ```
 
-`requireRole` is a coarse role gate. Ownership checks, such as a customer reading only their own deliveries, belong in services. Mounting `requireRole` without `authenticate` fails closed with a 500.
+`requireRole` is a coarse role gate. Ownership checks, such as a customer reading only their own deliveries, belong in services. Mounting `requireRole` or `idempotency` without `authenticate` fails closed with a 500.
+
+Order creation, which is what a later payment is collected against:
+
+```ts
+router.post(
+  "/",
+  authenticate,
+  requireRole("customer"),
+  validate({ body: quoteBodySchema }),
+  idempotency("orders.create"),
+  controller.createOrder,
+);
+```
 
 ### Accounts
 

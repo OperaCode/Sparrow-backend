@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { createUsersRepository } from '../../../src/modules/users/users.repository.js';
+import { createUsersRepository } from '#src/modules/users/users.repository.js';
 import { createTestAccount } from '../../helpers/account.js';
 import { buildTestApp, protectedTestModule } from '../../helpers/app.js';
 import { createTestPrisma, truncateAllTables } from '../../helpers/database.js';

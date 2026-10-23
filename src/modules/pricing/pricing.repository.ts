@@ -1,11 +1,13 @@
-import { Prisma } from '../../generated/prisma/client.js';
-import type { PrismaClient } from '../../lib/prisma.js';
+import { Prisma } from "../../generated/prisma/client.js";
+import type { PrismaClient } from "../../lib/prisma.js";
+import type { AuditActor } from "../../types/auth.js";
+import { createAuditRepository } from "../audit/audit.repository.js";
 import {
   PricingConfigurationError,
   amountDue,
   assertPositiveNaira,
-} from './pricing.money.js';
-import { APPROVED_PRICE_RULES } from './pricing.catalog.js';
+} from "./pricing.money.js";
+import { APPROVED_PRICE_RULES } from "./pricing.catalog.js";
 import type {
   ErrandTier,
   Place,
@@ -19,9 +21,9 @@ import type {
   RuleUpdate,
   SpecialPickupTier,
   ZoneTier,
-} from './pricing.types.js';
+} from "./pricing.types.js";
 
-type ServiceType = QuoteInput['service'];
+type ServiceType = QuoteInput["service"];
 
 interface SnapshotRow {
   id: string;
@@ -36,7 +38,7 @@ interface SnapshotRow {
   totalNaira: number | null;
 }
 
-export type ManualQuoteWriteResult = PricedOrder | 'missing' | 'not_pending';
+export type ManualQuoteWriteResult = PricedOrder | "missing" | "not_pending";
 
 export interface CreatePricedOrderArgs {
   customerId: string;
@@ -50,27 +52,28 @@ export interface PricingRepository {
     component: PricingComponent,
     tier: string,
     patch: RuleUpdate,
+    actor: AuditActor,
   ): Promise<PriceRuleRecord | null>;
   createPricedOrder(args: CreatePricedOrderArgs): Promise<PricedOrder>;
   findOrder(id: string): Promise<PricedOrder | null>;
   applyManualQuote(
     id: string,
     amountNaira: number,
-    quotedById: string,
+    actor: AuditActor,
   ): Promise<ManualQuoteWriteResult>;
 }
 
 function isRecordNotFound(error: unknown): boolean {
   return (
     error instanceof Prisma.PrismaClientKnownRequestError &&
-    error.code === 'P2025'
+    error.code === "P2025"
   );
 }
 
 function toRule(row: {
-  component: PriceRuleRecord['component'];
+  component: PriceRuleRecord["component"];
   tier: string;
-  quoteMode: PriceRuleRecord['quoteMode'];
+  quoteMode: PriceRuleRecord["quoteMode"];
   amountNaira: number | null;
 }): PriceRuleRecord {
   return {
@@ -85,25 +88,25 @@ function toPricedOrder(row: SnapshotRow): PricedOrder {
   const components: PriceComponentQuote[] = [];
   if (row.errandTier !== null) {
     components.push({
-      component: 'errand',
+      component: "errand",
       tier: row.errandTier,
-      quoteMode: row.errandAmountNaira === null ? 'manual' : 'automatic',
+      quoteMode: row.errandAmountNaira === null ? "manual" : "automatic",
       amountNaira: row.errandAmountNaira,
     });
   }
   if (row.zoneTier !== null) {
     components.push({
-      component: 'standard_zone',
+      component: "standard_zone",
       tier: row.zoneTier,
-      quoteMode: row.zoneAmountNaira === null ? 'manual' : 'automatic',
+      quoteMode: row.zoneAmountNaira === null ? "manual" : "automatic",
       amountNaira: row.zoneAmountNaira,
     });
   }
   if (row.specialPickupTier !== null) {
     components.push({
-      component: 'special_pickup',
+      component: "special_pickup",
       tier: row.specialPickupTier,
-      quoteMode: row.specialPickupAmountNaira === null ? 'manual' : 'automatic',
+      quoteMode: row.specialPickupAmountNaira === null ? "manual" : "automatic",
       amountNaira: row.specialPickupAmountNaira,
     });
   }
@@ -114,7 +117,7 @@ function toPricedOrder(row: SnapshotRow): PricedOrder {
     id: row.id,
     serviceType: row.serviceType,
     pricingStatus: row.pricingStatus,
-    currency: 'NGN',
+    currency: "NGN",
     components,
     totalNaira: row.totalNaira,
   };
@@ -129,13 +132,13 @@ function assertStoredTotal(
   row: SnapshotRow,
   components: readonly PriceComponentQuote[],
 ): void {
-  if (row.pricingStatus === 'manual_quoted') {
-    assertPositiveNaira(row.totalNaira, 'stored total');
+  if (row.pricingStatus === "manual_quoted") {
+    assertPositiveNaira(row.totalNaira, "stored total");
     return;
   }
   if (row.totalNaira !== amountDue(components)) {
     throw new PricingConfigurationError(
-      'Stored total does not match the snapshotted components',
+      "Stored total does not match the snapshotted components",
     );
   }
 }
@@ -155,10 +158,10 @@ interface ManualQuoteRow {
 
 function wholeNaira(value: number | string | bigint | null): number | null {
   if (value === null) return null;
-  const amount = typeof value === 'number' ? value : Number(value);
+  const amount = typeof value === "number" ? value : Number(value);
   if (!Number.isSafeInteger(amount)) {
     throw new PricingConfigurationError(
-      'Stored amount was not a whole number of naira',
+      "Stored amount was not a whole number of naira",
     );
   }
   return amount;
@@ -172,13 +175,13 @@ function orderFromManualQuote(
   const totalNaira = wholeNaira(row.totalNaira);
   if (totalNaira !== amountNaira) {
     throw new PricingConfigurationError(
-      'Manual quote was not stored as entered',
+      "Manual quote was not stored as entered",
     );
   }
   return toPricedOrder({
     id: row.id,
     serviceType: row.serviceType as ServiceType,
-    pricingStatus: 'manual_quoted',
+    pricingStatus: "manual_quoted",
     errandTier: row.errandTier as ErrandTier | null,
     errandAmountNaira: wholeNaira(row.errandAmountNaira),
     zoneTier: row.zoneTier as ZoneTier | null,
@@ -199,25 +202,25 @@ function orderCreateData(
   quote: PriceQuote,
 ): Prisma.OrderCreateInput {
   const zone = quote.components.find(
-    (component) => component.component === 'standard_zone',
+    (component) => component.component === "standard_zone",
   );
   const specialPickup = quote.components.find(
-    (component) => component.component === 'special_pickup',
+    (component) => component.component === "special_pickup",
   );
   const errand = quote.components.find(
-    (component) => component.component === 'errand',
+    (component) => component.component === "errand",
   );
 
   return {
     customer: { connect: { id: customerId } },
     serviceType: input.service,
-    pickupPlace: placeOrNull('pickup' in input ? input.pickup : undefined),
+    pickupPlace: placeOrNull("pickup" in input ? input.pickup : undefined),
     destinationPlace: placeOrNull(
-      'destination' in input ? input.destination : undefined,
+      "destination" in input ? input.destination : undefined,
     ),
     collectionPlace:
-      input.service === 'special_pickup' ? input.collection : null,
-    errandTier: input.service === 'errand' ? input.errandTier : null,
+      input.service === "special_pickup" ? input.collection : null,
+    errandTier: input.service === "errand" ? input.errandTier : null,
     pricingStatus: quote.pricingStatus,
     zoneTier: zone?.tier ?? null,
     zoneAmountNaira: zone?.amountNaira ?? null,
@@ -235,6 +238,7 @@ export async function seedApprovedPrices(prisma: PrismaClient): Promise<void> {
 export function createPricingRepository(
   prisma: PrismaClient,
 ): PricingRepository {
+  const audit = createAuditRepository();
   async function findOrder(id: string): Promise<PricedOrder | null> {
     const row = await prisma.order.findUnique({ where: { id } });
     return row === null ? null : toPricedOrder(row);
@@ -246,16 +250,35 @@ export function createPricingRepository(
       return rows.map(toRule);
     },
 
-    async updateRule(component, tier, patch) {
+    async updateRule(component, tier, patch, actor) {
       try {
-        const row = await prisma.priceRule.update({
-          where: { component_tier: { component, tier } },
-          data: {
-            quoteMode: patch.quoteMode,
-            amountNaira: patch.amountNaira,
-          },
+        return await prisma.$transaction(async (tx) => {
+          const existing = await tx.priceRule.findUnique({
+            where: { component_tier: { component, tier } },
+          });
+          if (existing === null) return null;
+          const row = await tx.priceRule.update({
+            where: { component_tier: { component, tier } },
+            data: {
+              quoteMode: patch.quoteMode,
+              amountNaira: patch.amountNaira,
+            },
+          });
+          await audit.record(tx, {
+            actorId: actor.actorId,
+            requestId: actor.requestId,
+            action: "pricing.rule.update",
+            targetType: "price_rule",
+            targetId: `${component}:${tier}`,
+            metadata: {
+              fromQuoteMode: existing.quoteMode,
+              toQuoteMode: row.quoteMode,
+              fromAmountNaira: existing.amountNaira,
+              toAmountNaira: row.amountNaira,
+            },
+          });
+          return toRule(row);
         });
-        return toRule(row);
       } catch (error) {
         if (isRecordNotFound(error)) return null;
         throw error;
@@ -273,7 +296,7 @@ export function createPricingRepository(
         const due = amountDue(quote.components);
         if (quote.totalNaira !== due) {
           throw new PricingConfigurationError(
-            'Refusing to store a quote whose total does not match its components',
+            "Refusing to store a quote whose total does not match its components",
           );
         }
         return tx.order.create({
@@ -290,15 +313,15 @@ export function createPricingRepository(
      * read could observe a different total, or miss the row after the charge
      * was saved.
      */
-    async applyManualQuote(id, amountNaira, quotedById) {
-      assertPositiveNaira(amountNaira, 'manual quote');
+    async applyManualQuote(id, amountNaira, actor) {
+      assertPositiveNaira(amountNaira, "manual quote");
       return prisma.$transaction(async (tx) => {
         const rows = await tx.$queryRaw<ManualQuoteRow[]>`
           UPDATE "orders"
           SET
             "pricing_status" = 'manual_quoted',
             "total_naira" = ${amountNaira},
-            "quoted_by_id" = CAST(${quotedById} AS uuid),
+            "quoted_by_id" = CAST(${actor.actorId} AS uuid),
             "quoted_at" = CURRENT_TIMESTAMP,
             "updated_at" = CURRENT_TIMESTAMP
           WHERE "id" = CAST(${id} AS uuid)
@@ -317,14 +340,23 @@ export function createPricingRepository(
         `;
         const written = rows[0];
         if (written !== undefined) {
-          return orderFromManualQuote(written, amountNaira);
+          const order = orderFromManualQuote(written, amountNaira);
+          await audit.record(tx, {
+            actorId: actor.actorId,
+            requestId: actor.requestId,
+            action: "order.manual_quote",
+            targetType: "order",
+            targetId: order.id,
+            metadata: { amountNaira },
+          });
+          return order;
         }
 
         const existing = await tx.order.findUnique({
           where: { id },
           select: { id: true },
         });
-        return existing === null ? 'missing' : 'not_pending';
+        return existing === null ? "missing" : "not_pending";
       });
     },
   };

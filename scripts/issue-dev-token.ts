@@ -1,9 +1,9 @@
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
-import { ConfigError, loadConfig, type Config } from '../src/config/env.js';
-import { createPrismaClient } from '../src/lib/prisma.js';
-import { signAccessToken } from '../src/modules/auth/access-token.service.js';
-import { ROLES } from '../src/types/auth.js';
+import { ConfigError, loadConfig, type Config } from '#src/config/env.js';
+import { createPrismaClient } from '#src/lib/prisma.js';
+import { signAccessToken } from '#src/modules/auth/access-token.service.js';
+import { ROLES } from '#src/types/auth.js';
 
 const USAGE =
   'Usage: npm run token:dev -- --phone +2348012345678 --role customer|rider|admin';

@@ -3,7 +3,7 @@ import {
   manualQuoteBodySchema,
   quoteBodySchema,
   updateRuleBodySchema,
-} from '../../../../src/modules/pricing/pricing.schema.js';
+} from '#src/modules/pricing/pricing.schema.js';
 
 const local = {
   service: 'standard',

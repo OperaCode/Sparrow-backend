@@ -1,9 +1,9 @@
-import { classifySpecialPickup, classifyZone } from './pricing.classify.js';
+import { classifySpecialPickup, classifyZone } from "./pricing.classify.js";
 import {
   PricingConfigurationError,
   amountDue,
   assertPositiveNaira,
-} from './pricing.money.js';
+} from "./pricing.money.js";
 import {
   CURRENCY,
   type ErrandTier,
@@ -16,15 +16,15 @@ import {
   type QuoteMode,
   type SpecialPickupTier,
   type ZoneTier,
-} from './pricing.types.js';
+} from "./pricing.types.js";
 
-export { PricingConfigurationError } from './pricing.money.js';
+export { PricingConfigurationError } from "./pricing.money.js";
 
 /** The request names an errand delivery with only one end. */
 export class InvalidQuoteInputError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'InvalidQuoteInputError';
+    this.name = "InvalidQuoteInputError";
   }
 }
 
@@ -37,7 +37,7 @@ function indexRules(rules: readonly PriceRuleRecord[]): RuleIndex {
   );
   if (byTier.size !== rules.length) {
     throw new PricingConfigurationError(
-      'The price list has two amounts for the same tier',
+      "The price list has two amounts for the same tier",
     );
   }
   return byTier;
@@ -64,28 +64,28 @@ function money(
 ): { quoteMode: QuoteMode; amountNaira: number | null } {
   const rule = findRule(byTier, component, tier);
   const manualWithAmount =
-    rule.quoteMode === 'manual' && rule.amountNaira !== null;
+    rule.quoteMode === "manual" && rule.amountNaira !== null;
   const automaticWithoutAmount =
-    rule.quoteMode === 'automatic' && rule.amountNaira === null;
+    rule.quoteMode === "automatic" && rule.amountNaira === null;
   if (manualWithAmount || automaticWithoutAmount) {
     throw new PricingConfigurationError(
       `${component}/${tier} breaks the automatic/manual amount rule`,
     );
   }
-  if (rule.quoteMode === 'manual') {
-    return { quoteMode: 'manual', amountNaira: null };
+  if (rule.quoteMode === "manual") {
+    return { quoteMode: "manual", amountNaira: null };
   }
   return {
-    quoteMode: 'automatic',
+    quoteMode: "automatic",
     amountNaira: assertPositiveNaira(rule.amountNaira, `${component}/${tier}`),
   };
 }
 
 function zoneQuote(tier: ZoneTier, byTier: RuleIndex): PriceComponentQuote {
   return {
-    component: 'standard_zone',
+    component: "standard_zone",
     tier,
-    ...money('standard_zone', tier, byTier),
+    ...money("standard_zone", tier, byTier),
   };
 }
 
@@ -94,14 +94,14 @@ function specialPickupQuote(
   byTier: RuleIndex,
 ): PriceComponentQuote {
   return {
-    component: 'special_pickup',
+    component: "special_pickup",
     tier,
-    ...money('special_pickup', tier, byTier),
+    ...money("special_pickup", tier, byTier),
   };
 }
 
 function errandQuote(tier: ErrandTier, byTier: RuleIndex): PriceComponentQuote {
-  return { component: 'errand', tier, ...money('errand', tier, byTier) };
+  return { component: "errand", tier, ...money("errand", tier, byTier) };
 }
 
 function optionalZone(
@@ -113,7 +113,7 @@ function optionalZone(
   const missingDestination = destination === undefined;
   if (missingPickup !== missingDestination) {
     throw new InvalidQuoteInputError(
-      'Pickup and destination are both required when an errand includes delivery',
+      "Pickup and destination are both required when an errand includes delivery",
     );
   }
   if (pickup === undefined || destination === undefined) return undefined;
@@ -125,9 +125,9 @@ function componentsFor(
   byTier: RuleIndex,
 ): PriceComponentQuote[] {
   switch (input.service) {
-    case 'standard':
+    case "standard":
       return [zoneQuote(classifyZone(input.pickup, input.destination), byTier)];
-    case 'special_pickup':
+    case "special_pickup":
       return [
         zoneQuote(classifyZone(input.pickup, input.destination), byTier),
         specialPickupQuote(
@@ -135,7 +135,7 @@ function componentsFor(
           byTier,
         ),
       ];
-    case 'errand': {
+    case "errand": {
       const zone = optionalZone(input.pickup, input.destination, byTier);
       const task = errandQuote(input.errandTier, byTier);
       return zone === undefined ? [task] : [task, zone];
@@ -146,7 +146,7 @@ function componentsFor(
 function finish(components: PriceComponentQuote[]): PriceQuote {
   const totalNaira = amountDue(components);
   return {
-    pricingStatus: totalNaira === null ? 'pending_manual_quote' : 'auto',
+    pricingStatus: totalNaira === null ? "pending_manual_quote" : "auto",
     currency: CURRENCY,
     components,
     totalNaira,

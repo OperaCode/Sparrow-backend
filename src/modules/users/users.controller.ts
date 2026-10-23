@@ -1,15 +1,16 @@
-import type { Request, RequestHandler } from 'express';
-import type { z } from 'zod';
-import { UnauthorizedError } from '../../http/errors.js';
-import { sendData } from '../../http/response.js';
-import type { AuthContext } from '../../types/auth.js';
+import type { Request, RequestHandler } from "express";
+import type { z } from "zod";
+import { auditActor } from "../../http/middleware/authenticate.js";
+import { UnauthorizedError } from "../../http/errors.js";
+import { sendData } from "../../http/response.js";
+import type { AuthContext } from "../../types/auth.js";
 import type {
   roleBodySchema,
   statusBodySchema,
   userParamsSchema,
-} from './users.schema.js';
-import type { UsersService } from './users.service.js';
-import type { ProfilePatch, ProvisionInput } from './users.types.js';
+} from "./users.schema.js";
+import type { UsersService } from "./users.service.js";
+import type { ProfilePatch, ProvisionInput } from "./users.types.js";
 
 export interface UsersController {
   show: RequestHandler;
@@ -52,29 +53,29 @@ export function createUsersController(service: UsersService): UsersController {
     },
 
     provision: async (req, res) => {
-      const { userId } = requireAuth(req);
       const profile = await service.provisionAccount(
-        userId,
+        auditActor(req),
         bodyOf(req) as ProvisionInput,
       );
       sendData(res, profile, { status: 201 });
     },
 
     setStatus: async (req, res) => {
-      const { userId } = requireAuth(req);
       const params = req.params as z.output<typeof userParamsSchema>;
       const body = bodyOf(req) as z.output<typeof statusBodySchema>;
       sendData(
         res,
-        await service.setAccountStatus(userId, params.id, body.status),
+        await service.setAccountStatus(auditActor(req), params.id, body.status),
       );
     },
 
     setRole: async (req, res) => {
-      const { userId } = requireAuth(req);
       const params = req.params as z.output<typeof userParamsSchema>;
       const body = bodyOf(req) as z.output<typeof roleBodySchema>;
-      sendData(res, await service.setAccountRole(userId, params.id, body.role));
+      sendData(
+        res,
+        await service.setAccountRole(auditActor(req), params.id, body.role),
+      );
     },
   };
 }

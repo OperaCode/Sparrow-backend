@@ -1,18 +1,18 @@
-import { Router } from 'express';
-import type { V1Module } from '../../api/v1/router.js';
-import { validate } from '../../http/middleware/validate.js';
-import type { Logger } from '../../lib/logger.js';
-import type { PrismaClient } from '../../lib/prisma.js';
-import { createPricingController } from './pricing.controller.js';
-import { createPricingRepository } from './pricing.repository.js';
+import { Router } from "express";
+import type { V1Module } from "../../api/v1/router.js";
+import { validate } from "../../http/middleware/validate.js";
+import type { Logger } from "../../lib/logger.js";
+import type { PrismaClient } from "../../lib/prisma.js";
+import { createPricingController } from "./pricing.controller.js";
+import { createPricingRepository } from "./pricing.repository.js";
 import {
   manualQuoteBodySchema,
   orderParamsSchema,
   quoteBodySchema,
   ruleParamsSchema,
   updateRuleBodySchema,
-} from './pricing.schema.js';
-import { createPricingService } from './pricing.service.js';
+} from "./pricing.schema.js";
+import { createPricingService } from "./pricing.service.js";
 
 export function createPricingModules(deps: {
   prisma: PrismaClient;
@@ -26,19 +26,19 @@ export function createPricingModules(deps: {
   );
 
   const quotes: V1Module = {
-    path: '/pricing',
+    path: "/pricing",
     createRouter({ authenticate, requireRole }) {
       const router = Router();
       router.post(
-        '/quotes',
+        "/quotes",
         authenticate,
         validate({ body: quoteBodySchema }),
         controller.quote,
       );
       router.patch(
-        '/rules/:component/:tier',
+        "/rules/:component/:tier",
         authenticate,
-        requireRole('admin'),
+        requireRole("admin"),
         validate({ params: ruleParamsSchema, body: updateRuleBodySchema }),
         controller.updateRule,
       );
@@ -47,20 +47,23 @@ export function createPricingModules(deps: {
   };
 
   const orders: V1Module = {
-    path: '/orders',
-    createRouter({ authenticate, requireRole }) {
+    path: "/orders",
+    createRouter({ authenticate, requireRole, idempotency }) {
       const router = Router();
+      // Validate before the key is claimed, so a rejected payload can be
+      // corrected and retried with the same key. Payment routes use this guard.
       router.post(
-        '/',
+        "/",
         authenticate,
-        requireRole('customer'),
+        requireRole("customer"),
         validate({ body: quoteBodySchema }),
+        idempotency("orders.create"),
         controller.createOrder,
       );
       router.post(
-        '/:id/manual-quote',
+        "/:id/manual-quote",
         authenticate,
-        requireRole('admin'),
+        requireRole("admin"),
         validate({ params: orderParamsSchema, body: manualQuoteBodySchema }),
         controller.applyManualQuote,
       );

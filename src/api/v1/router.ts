@@ -1,9 +1,11 @@
-import { Router, type RequestHandler } from 'express';
-import type { requireRole } from '../../http/middleware/require-role.js';
+import { Router, type RequestHandler } from "express";
+import type { createIdempotency } from "../../http/middleware/idempotency.js";
+import type { requireRole } from "../../http/middleware/require-role.js";
 
 export interface RouteGuards {
   authenticate: RequestHandler;
   requireRole: typeof requireRole;
+  idempotency: ReturnType<typeof createIdempotency>;
 }
 
 /**

@@ -1,8 +1,8 @@
-import type { Config } from '../../src/config/env.js';
-import type { PrismaClient } from '../../src/lib/prisma.js';
-import type { UsersService } from '../../src/modules/users/users.service.js';
-import type { UserProfile } from '../../src/modules/users/users.types.js';
-import type { Role } from '../../src/types/auth.js';
+import type { Config } from '#src/config/env.js';
+import type { PrismaClient } from '#src/lib/prisma.js';
+import type { UsersService } from '#src/modules/users/users.service.js';
+import type { UserProfile } from '#src/modules/users/users.types.js';
+import type { Role } from '#src/types/auth.js';
 import { createTestAccount } from './account.js';
 
 const PROFILE: UserProfile = {

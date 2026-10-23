@@ -1,4 +1,4 @@
-import type { PriceRuleRecord } from './pricing.types.js';
+import type { PriceRuleRecord } from "./pricing.types.js";
 
 /**
  * Approved V1 rates inserted by the pricing migration. Live quotes read
@@ -7,80 +7,80 @@ import type { PriceRuleRecord } from './pricing.types.js';
  */
 export const APPROVED_PRICE_RULES: readonly PriceRuleRecord[] = [
   {
-    component: 'standard_zone',
-    tier: 'A',
+    component: "standard_zone",
+    tier: "A",
     amountNaira: 800,
-    quoteMode: 'automatic',
+    quoteMode: "automatic",
   },
   {
-    component: 'standard_zone',
-    tier: 'B',
+    component: "standard_zone",
+    tier: "B",
     amountNaira: 1000,
-    quoteMode: 'automatic',
+    quoteMode: "automatic",
   },
   {
-    component: 'standard_zone',
-    tier: 'C',
+    component: "standard_zone",
+    tier: "C",
     amountNaira: 1300,
-    quoteMode: 'automatic',
+    quoteMode: "automatic",
   },
   {
-    component: 'standard_zone',
-    tier: 'extended',
+    component: "standard_zone",
+    tier: "extended",
     amountNaira: null,
-    quoteMode: 'manual',
+    quoteMode: "manual",
   },
   {
-    component: 'standard_zone',
-    tier: 'outside_area',
+    component: "standard_zone",
+    tier: "outside_area",
     amountNaira: null,
-    quoteMode: 'manual',
+    quoteMode: "manual",
   },
   {
-    component: 'special_pickup',
-    tier: 'local',
+    component: "special_pickup",
+    tier: "local",
     amountNaira: 500,
-    quoteMode: 'automatic',
+    quoteMode: "automatic",
   },
   {
-    component: 'special_pickup',
-    tier: 'nearby',
+    component: "special_pickup",
+    tier: "nearby",
     amountNaira: 700,
-    quoteMode: 'automatic',
+    quoteMode: "automatic",
   },
   {
-    component: 'special_pickup',
-    tier: 'extended',
+    component: "special_pickup",
+    tier: "extended",
     amountNaira: null,
-    quoteMode: 'manual',
+    quoteMode: "manual",
   },
   {
-    component: 'special_pickup',
-    tier: 'outside_area',
+    component: "special_pickup",
+    tier: "outside_area",
     amountNaira: null,
-    quoteMode: 'manual',
+    quoteMode: "manual",
   },
   {
-    component: 'errand',
-    tier: 'simple',
+    component: "errand",
+    tier: "simple",
     amountNaira: 500,
-    quoteMode: 'automatic',
+    quoteMode: "automatic",
   },
   {
-    component: 'errand',
-    tier: 'moderate',
+    component: "errand",
+    tier: "moderate",
     amountNaira: 700,
-    quoteMode: 'automatic',
+    quoteMode: "automatic",
   },
   {
-    component: 'errand',
-    tier: 'complex',
+    component: "errand",
+    tier: "complex",
     amountNaira: null,
-    quoteMode: 'manual',
+    quoteMode: "manual",
   },
 ];
 
 export function priceRuleSqlTuple(rule: PriceRuleRecord): string {
-  const amount = rule.amountNaira === null ? 'NULL' : String(rule.amountNaira);
+  const amount = rule.amountNaira === null ? "NULL" : String(rule.amountNaira);
   return `('${rule.component}', '${rule.tier}', ${amount}, '${rule.quoteMode}')`;
 }

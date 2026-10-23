@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { APPROVED_PRICE_RULES } from '../../../../src/modules/pricing/pricing.catalog.js';
+import { APPROVED_PRICE_RULES } from '#src/modules/pricing/pricing.catalog.js';
 import {
   InvalidQuoteInputError,
   PricingConfigurationError,
   calculatePrice,
-} from '../../../../src/modules/pricing/pricing.calculate.js';
-import { amountDue } from '../../../../src/modules/pricing/pricing.money.js';
+} from '#src/modules/pricing/pricing.calculate.js';
+import { amountDue } from '#src/modules/pricing/pricing.money.js';
 import type {
   ErrandTier,
   Place,
   PriceRuleRecord,
   QuoteInput,
-} from '../../../../src/modules/pricing/pricing.types.js';
+} from '#src/modules/pricing/pricing.types.js';
 
 const rules = APPROVED_PRICE_RULES;
 

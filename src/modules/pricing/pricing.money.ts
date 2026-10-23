@@ -2,13 +2,13 @@ import {
   MAX_AMOUNT_NAIRA,
   PRICING_COMPONENTS,
   type PriceComponentQuote,
-} from './pricing.types.js';
+} from "./pricing.types.js";
 
 /** The price list or a stored snapshot cannot be charged safely. */
 export class PricingConfigurationError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'PricingConfigurationError';
+    this.name = "PricingConfigurationError";
   }
 }
 
@@ -38,15 +38,15 @@ export function assertPositiveNaira(
 
 function legAmount(component: PriceComponentQuote): number | null {
   const amount = component.amountNaira;
-  const manualWithAmount = component.quoteMode === 'manual' && amount !== null;
+  const manualWithAmount = component.quoteMode === "manual" && amount !== null;
   const automaticWithoutAmount =
-    component.quoteMode === 'automatic' && amount === null;
+    component.quoteMode === "automatic" && amount === null;
   if (manualWithAmount || automaticWithoutAmount) {
     throw new PricingConfigurationError(
       `${component.component} amount does not match its quote mode`,
     );
   }
-  if (component.quoteMode === 'manual') return null;
+  if (component.quoteMode === "manual") return null;
   return assertPositiveNaira(amount, component.component);
 }
 
@@ -59,7 +59,7 @@ export function amountDue(
   components: readonly PriceComponentQuote[],
 ): number | null {
   if (components.length === 0) {
-    throw new PricingConfigurationError('A quote needs at least one component');
+    throw new PricingConfigurationError("A quote needs at least one component");
   }
 
   const byLeg = new Map(
@@ -69,7 +69,7 @@ export function amountDue(
   );
   if (byLeg.size !== components.length) {
     throw new PricingConfigurationError(
-      'A quote has two amounts for the same leg',
+      "A quote has two amounts for the same leg",
     );
   }
 
@@ -81,7 +81,7 @@ export function amountDue(
 
   const total = charges.reduce((sum, amount) => sum + amount, 0);
   if (total > MAX_TOTAL_NAIRA) {
-    throw new PricingConfigurationError('Quote total exceeds the charge limit');
+    throw new PricingConfigurationError("Quote total exceeds the charge limit");
   }
   return total;
 }
