@@ -19,23 +19,47 @@ enum UserRole {
 enum UserStatus {
   active
   suspended
+  deactivated
 
   @@map("user_status")
 }
 
-/// Phone format (E.164) is also enforced by a CHECK constraint in the
-/// migration, which Prisma cannot express in the schema.
-model User {
-  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  phone     String     @unique @db.VarChar(16)
-  role      UserRole   @default(customer)
-  status    UserStatus @default(active)
-  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+enum AccountType {
+  standard
+  business
 
-  orders Order[] @relation("OrderCustomer")
-  quotes Order[] @relation("OrderQuotedBy")
-  priceRuleChanges PriceRuleChange[]
+  @@map("user_account_type")
+}
+
+/// A community the customer lives in. Extended and outside-area places are
+/// delivery zones, not account communities.
+enum Community {
+  igbesa
+  lusada
+  ketu
+
+  @@map("user_community")
+}
+
+/// Phone format (E.164) and trimmed names are also enforced by CHECK
+/// constraints in the migrations, which Prisma cannot express in the schema.
+/// Role and status are server-owned.
+model User {
+  id          String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  phone       String      @unique @db.VarChar(16)
+  name        String?     @db.VarChar(80)
+  community   Community?
+  accountType AccountType @default(standard) @map("account_type")
+  role        UserRole    @default(customer)
+  status      UserStatus  @default(active)
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  orders             Order[]             @relation("OrderCustomer")
+  quotes             Order[]             @relation("OrderQuotedBy")
+  priceRuleChanges   PriceRuleChange[]
+  auditEvents        AuditEvent[]
+  idempotencyRecords IdempotencyRecord[]
 
   @@map("users")
 }
@@ -203,4 +227,51 @@ model Order {
 
   @@index([customerId])
   @@map("orders")
+}
+
+enum IdempotencyState {
+  processing
+  completed
+
+  @@map("idempotency_state")
+}
+
+/// The finished response for a client retry key, written in the same
+/// transaction as the order it describes. Scoped to the actor and the
+/// operation. A rollback leaves no row. A committed row is never replaced
+/// or deleted.
+model IdempotencyRecord {
+  id           String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actorId      String           @map("actor_id") @db.Uuid
+  actor        User             @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  scope        String           @db.VarChar(64)
+  key          String           @db.VarChar(128)
+  requestHash  String           @map("request_hash") @db.Char(64)
+  state        IdempotencyState
+  statusCode   Int?             @map("status_code")
+  responseBody Json?            @map("response_body")
+  lockedAt     DateTime         @default(now()) @map("locked_at") @db.Timestamptz(3)
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  completedAt  DateTime?        @map("completed_at") @db.Timestamptz(3)
+
+  @@unique([actorId, scope, key])
+  @@map("idempotency_records")
+}
+
+/// Who did what to which record, on which request. Written in the same
+/// transaction as the privileged change it describes.
+model AuditEvent {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actorId    String   @map("actor_id") @db.Uuid
+  actor      User     @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  action     String   @db.VarChar(64)
+  targetType String   @map("target_type") @db.VarChar(64)
+  targetId   String   @map("target_id") @db.VarChar(64)
+  requestId  String   @map("request_id") @db.VarChar(64)
+  metadata   Json     @default("{}")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([actorId, createdAt])
+  @@index([targetType, targetId])
+  @@map("audit_events")
 }

@@ -3,16 +3,18 @@ import {
   NotFoundError,
   ServiceUnavailableError,
   ValidationError,
-} from '../../http/errors.js';
-import type { Logger } from '../../lib/logger.js';
+} from "../../http/errors.js";
+import type { Logger } from "../../lib/logger.js";
+import type { AuditActor } from "../../types/auth.js";
+import type { IdempotencyClaim } from "../../types/idempotency.js";
 import {
   InvalidQuoteInputError,
   PricingConfigurationError,
   calculatePrice,
-} from './pricing.calculate.js';
-import { resolveQuote } from './pricing.locate.js';
-import { isChargeableKobo } from './pricing.money.js';
-import type { PricingRepository } from './pricing.repository.js';
+} from "./pricing.calculate.js";
+import { resolveQuote } from "./pricing.locate.js";
+import { isChargeableKobo } from "./pricing.money.js";
+import type { PricingRepository } from "./pricing.repository.js";
 import type {
   AreaBox,
   PriceQuote,
@@ -23,22 +25,34 @@ import type {
   RuleUpdate,
   ServiceArea,
   ServiceAreaPlace,
-} from './pricing.types.js';
+} from "./pricing.types.js";
+
+export type CreateOrderResult =
+  | { outcome: "created"; order: PricedOrder }
+  | { outcome: "replay"; statusCode: number; body: unknown };
 
 export interface PricingService {
   quote(request: QuoteRequest): Promise<PriceQuote>;
-  createOrder(customerId: string, request: QuoteRequest): Promise<PricedOrder>;
+  createOrder(
+    customerId: string,
+    request: QuoteRequest,
+    claim: IdempotencyClaim,
+  ): Promise<CreateOrderResult>;
   updateRule(
     component: PricingComponent,
     tier: string,
     patch: RuleUpdate,
-    actorId: string,
+    actor: AuditActor,
   ): Promise<PriceRuleRecord>;
-  updateArea(place: ServiceAreaPlace, box: AreaBox): Promise<ServiceArea>;
+  updateArea(
+    place: ServiceAreaPlace,
+    box: AreaBox,
+    actor: AuditActor,
+  ): Promise<ServiceArea>;
   applyManualQuote(
     orderId: string,
     amountKobo: number,
-    adminId: string,
+    actor: AuditActor,
   ): Promise<PricedOrder>;
 }
 
@@ -51,8 +65,8 @@ interface PricingServiceOptions {
  * Turns a broken price list into a client-safe 503. The detail stays in the log.
  */
 function unavailable(logger: Logger, error: PricingConfigurationError): never {
-  logger.error({ err: error }, 'Pricing configuration is incomplete');
-  throw new ServiceUnavailableError('Pricing is temporarily unavailable');
+  logger.error({ err: error }, "Pricing configuration is incomplete");
+  throw new ServiceUnavailableError("Pricing is temporarily unavailable");
 }
 
 export function createPricingService(
@@ -72,7 +86,7 @@ export function createPricingService(
         unavailable(logger, error);
       if (error instanceof InvalidQuoteInputError) {
         throw new ValidationError([
-          { path: 'body.destination', message: error.message },
+          { path: "body.destination", message: error.message },
         ]);
       }
       throw error;
@@ -101,31 +115,45 @@ export function createPricingService(
       );
     },
 
-    createOrder(customerId, request) {
-      return guardConfiguration(() =>
+    async createOrder(customerId, request, claim) {
+      const result = await guardConfiguration(() =>
         repository.createPricedOrder({
           customerId,
           request,
+          claim,
           quoteFromRules: (rules, areas) => price(request, rules, areas),
         }),
       );
+      if (result.outcome === "mismatch") {
+        throw new ConflictError(
+          "This idempotency key was already used for a different request",
+          "IDEMPOTENCY_CONFLICT",
+        );
+      }
+      if (result.outcome === "in_progress") {
+        throw new ConflictError(
+          "A request with this idempotency key is already in progress",
+          "IDEMPOTENCY_IN_PROGRESS",
+        );
+      }
+      return result;
     },
 
-    async updateRule(component, tier, patch, actorId) {
-      if (patch.quoteMode === 'automatic') {
+    async updateRule(component, tier, patch, actor) {
+      if (patch.quoteMode === "automatic") {
         if (patch.amountKobo === null || !isChargeableKobo(patch.amountKobo)) {
           throw new ValidationError([
             {
-              path: 'body.amountKobo',
-              message: 'Amount must be a positive whole number of kobo',
+              path: "body.amountKobo",
+              message: "Amount must be a positive whole number of kobo",
             },
           ]);
         }
         if (patch.minimumKobo !== null) {
           throw new ValidationError([
             {
-              path: 'body.minimumKobo',
-              message: 'An automatic price cannot carry a manual floor',
+              path: "body.minimumKobo",
+              message: "An automatic price cannot carry a manual floor",
             },
           ]);
         }
@@ -136,8 +164,8 @@ export function createPricingService(
       ) {
         throw new ValidationError([
           {
-            path: 'body.minimumKobo',
-            message: 'A manual tier requires a positive whole-kobo minimum',
+            path: "body.minimumKobo",
+            message: "A manual tier requires a positive whole-kobo minimum",
           },
         ]);
       }
@@ -145,13 +173,13 @@ export function createPricingService(
         component,
         tier,
         patch,
-        actorId,
+        actor,
       );
-      if (updated === null) throw new NotFoundError('Price rule not found');
+      if (updated === null) throw new NotFoundError("Price rule not found");
       return updated;
     },
 
-    async updateArea(place, box) {
+    async updateArea(place, box, actor) {
       const latitudes =
         box.minLatitude >= box.maxLatitude ||
         box.minLatitude < -90 ||
@@ -170,19 +198,19 @@ export function createPricingService(
       ) {
         throw new ValidationError([
           {
-            path: 'body',
-            message: 'Area bounds must be a finite, non-empty box',
+            path: "body",
+            message: "Area bounds must be a finite, non-empty box",
           },
         ]);
       }
-      const updated = await repository.updateArea(place, box);
-      if (updated === 'missing')
-        throw new NotFoundError('Service area not found');
-      if (updated === 'invalid') {
+      const updated = await repository.updateArea(place, box, actor);
+      if (updated === "missing")
+        throw new NotFoundError("Service area not found");
+      if (updated === "invalid") {
         throw new ValidationError([
           {
-            path: 'body',
-            message: 'Community areas must not cover the same ground',
+            path: "body",
+            message: "Community areas must not cover the same ground",
           },
         ]);
       }
@@ -193,28 +221,28 @@ export function createPricingService(
      * The agreed figure is the full amount due. It is not added to component
      * amounts, and it is not read back from the price list.
      */
-    async applyManualQuote(orderId, amountKobo, adminId) {
+    async applyManualQuote(orderId, amountKobo, actor) {
       if (!isChargeableKobo(amountKobo)) {
         throw new ValidationError([
           {
-            path: 'body.amountKobo',
-            message: 'Amount must be a positive whole number of kobo',
+            path: "body.amountKobo",
+            message: "Amount must be a positive whole number of kobo",
           },
         ]);
       }
       const result = await repository.applyManualQuote(
         orderId,
         amountKobo,
-        adminId,
+        actor,
       );
-      if (result === 'missing') throw new NotFoundError('Order not found');
-      if (result === 'not_pending') {
-        throw new ConflictError('Only a pending manual quote can be priced');
+      if (result === "missing") throw new NotFoundError("Order not found");
+      if (result === "not_pending") {
+        throw new ConflictError("Only a pending manual quote can be priced");
       }
-      if ('belowMinimum' in result) {
+      if ("belowMinimum" in result) {
         throw new ValidationError([
           {
-            path: 'body.amountKobo',
+            path: "body.amountKobo",
             message: `Amount must be at least ${result.belowMinimum} kobo`,
           },
         ]);

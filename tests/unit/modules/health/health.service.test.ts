@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createLogger } from '../../../../src/lib/logger.js';
-import { createHealthService } from '../../../../src/modules/health/health.service.js';
+import { createLogger } from '#src/lib/logger.js';
+import { createHealthService } from '#src/modules/health/health.service.js';
 import { createLogCapture } from '../../../helpers/log-capture.js';
 
 function serviceWith(pingDatabase: () => Promise<void>, timeoutMs = 50) {

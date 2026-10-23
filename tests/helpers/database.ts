@@ -1,5 +1,5 @@
 import { inject } from 'vitest';
-import { createPrismaClient, type PrismaClient } from '../../src/lib/prisma.js';
+import { createPrismaClient, type PrismaClient } from '#src/lib/prisma.js';
 
 export function testDatabaseUrl(): string {
   return inject('databaseUrl');

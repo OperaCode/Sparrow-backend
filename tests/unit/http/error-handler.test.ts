@@ -10,15 +10,15 @@ import {
   UnauthorizedError,
   ValidationError,
   type AppError,
-} from '../../../src/http/errors.js';
-import { createErrorHandler } from '../../../src/http/middleware/error-handler.js';
-import { notFound } from '../../../src/http/middleware/not-found.js';
+} from '#src/http/errors.js';
+import { createErrorHandler } from '#src/http/middleware/error-handler.js';
+import { notFound } from '#src/http/middleware/not-found.js';
 import {
   REQUEST_ID_HEADER,
   requestId,
-} from '../../../src/http/middleware/request-id.js';
-import { sendData } from '../../../src/http/response.js';
-import { createLogger } from '../../../src/lib/logger.js';
+} from '#src/http/middleware/request-id.js';
+import { sendData } from '#src/http/response.js';
+import { createLogger } from '#src/lib/logger.js';
 import { errorOf } from '../../helpers/http.js';
 import { createLogCapture } from '../../helpers/log-capture.js';
 

@@ -1,11 +1,11 @@
 import { generateKeyPair, SignJWT, UnsecuredJWT, type JWTPayload } from 'jose';
 import { describe, expect, it } from 'vitest';
-import { UnauthorizedError } from '../../../../src/http/errors.js';
+import { UnauthorizedError } from '#src/http/errors.js';
 import {
   ACCESS_TOKEN_TYPE,
   createAccessTokenVerifier,
   signAccessToken,
-} from '../../../../src/modules/auth/access-token.service.js';
+} from '#src/modules/auth/access-token.service.js';
 import { testConfig, TEST_JWT_SECRET } from '../../../helpers/app.js';
 
 const config = testConfig();
