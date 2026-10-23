@@ -102,7 +102,7 @@ export function createApp(deps: AppDependencies): Express {
     createV1Router(deps.v1Modules, {
       authenticate,
       requireRole,
-      idempotency: createIdempotency(deps.idempotency, deps.logger),
+      idempotency: createIdempotency(deps.idempotency),
     }),
   );
 

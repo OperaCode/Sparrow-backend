@@ -64,13 +64,7 @@ export const protectedTestModule: V1Module = {
 };
 
 const unconfiguredIdempotency: IdempotencyStore = {
-  begin() {
-    return Promise.reject(new Error("idempotency store was not configured"));
-  },
-  complete() {
-    return Promise.reject(new Error("idempotency store was not configured"));
-  },
-  abandon() {
+  recover() {
     return Promise.reject(new Error("idempotency store was not configured"));
   },
 };

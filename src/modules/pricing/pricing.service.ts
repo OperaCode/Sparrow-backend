@@ -6,6 +6,7 @@ import {
 } from "../../http/errors.js";
 import type { Logger } from "../../lib/logger.js";
 import type { AuditActor } from "../../types/auth.js";
+import type { IdempotencyClaim } from "../../types/idempotency.js";
 import {
   InvalidQuoteInputError,
   PricingConfigurationError,
@@ -22,9 +23,17 @@ import type {
   RuleUpdate,
 } from "./pricing.types.js";
 
+export type CreateOrderResult =
+  | { outcome: "created"; order: PricedOrder }
+  | { outcome: "replay"; statusCode: number; body: unknown };
+
 export interface PricingService {
   quote(input: QuoteInput): Promise<PriceQuote>;
-  createOrder(customerId: string, input: QuoteInput): Promise<PricedOrder>;
+  createOrder(
+    customerId: string,
+    input: QuoteInput,
+    claim: IdempotencyClaim,
+  ): Promise<CreateOrderResult>;
   updateRule(
     component: PricingComponent,
     tier: string,
@@ -79,12 +88,26 @@ export function createPricingService(
       return price(input, await repository.listRules());
     },
 
-    createOrder(customerId, input) {
-      return repository.createPricedOrder({
+    async createOrder(customerId, input, claim) {
+      const result = await repository.createPricedOrder({
         customerId,
         input,
+        claim,
         quoteFromRules: (rules) => price(input, rules),
       });
+      if (result.outcome === "mismatch") {
+        throw new ConflictError(
+          "This idempotency key was already used for a different request",
+          "IDEMPOTENCY_CONFLICT",
+        );
+      }
+      if (result.outcome === "in_progress") {
+        throw new ConflictError(
+          "A request with this idempotency key is already in progress",
+          "IDEMPOTENCY_IN_PROGRESS",
+        );
+      }
+      return result;
     },
 
     async updateRule(component, tier, patch, actor) {

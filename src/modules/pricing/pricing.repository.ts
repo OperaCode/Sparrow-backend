@@ -1,7 +1,12 @@
 import { Prisma } from "../../generated/prisma/client.js";
 import type { PrismaClient } from "../../lib/prisma.js";
 import type { AuditActor } from "../../types/auth.js";
+import type { IdempotencyClaim } from "../../types/idempotency.js";
 import { createAuditRepository } from "../audit/audit.repository.js";
+import {
+  readIdempotentResult,
+  saveIdempotentResult,
+} from "../idempotency/idempotency.repository.js";
 import {
   PricingConfigurationError,
   amountDue,
@@ -43,8 +48,15 @@ export type ManualQuoteWriteResult = PricedOrder | "missing" | "not_pending";
 export interface CreatePricedOrderArgs {
   customerId: string;
   input: QuoteInput;
+  claim: IdempotencyClaim;
   quoteFromRules: (rules: readonly PriceRuleRecord[]) => PriceQuote;
 }
+
+export type CreatePricedOrderResult =
+  | { outcome: "created"; order: PricedOrder }
+  | { outcome: "replay"; statusCode: number; body: unknown }
+  | { outcome: "mismatch" }
+  | { outcome: "in_progress" };
 
 export interface PricingRepository {
   listRules(): Promise<PriceRuleRecord[]>;
@@ -54,7 +66,9 @@ export interface PricingRepository {
     patch: RuleUpdate,
     actor: AuditActor,
   ): Promise<PriceRuleRecord | null>;
-  createPricedOrder(args: CreatePricedOrderArgs): Promise<PricedOrder>;
+  createPricedOrder(
+    args: CreatePricedOrderArgs,
+  ): Promise<CreatePricedOrderResult>;
   findOrder(id: string): Promise<PricedOrder | null>;
   applyManualQuote(
     id: string,
@@ -67,6 +81,13 @@ function isRecordNotFound(error: unknown): boolean {
   return (
     error instanceof Prisma.PrismaClientKnownRequestError &&
     error.code === "P2025"
+  );
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2002"
   );
 }
 
@@ -288,22 +309,35 @@ export function createPricingRepository(
     /**
      * Reads the price list and inserts the snapshot in one transaction, so
      * the stored total is the list at that moment and later edits miss it.
+     * The idempotency result is inserted in that same transaction. A rollback
+     * removes both. A unique violation means another transaction already
+     * committed this key, so this order is discarded and that result is replayed.
      */
-    async createPricedOrder({ customerId, input, quoteFromRules }) {
-      const row = await prisma.$transaction(async (tx) => {
-        const rules = (await tx.priceRule.findMany()).map(toRule);
-        const quote = quoteFromRules(rules);
-        const due = amountDue(quote.components);
-        if (quote.totalNaira !== due) {
-          throw new PricingConfigurationError(
-            "Refusing to store a quote whose total does not match its components",
-          );
-        }
-        return tx.order.create({
-          data: orderCreateData(customerId, input, quote),
+    async createPricedOrder({ customerId, input, claim, quoteFromRules }) {
+      try {
+        const order = await prisma.$transaction(async (tx) => {
+          const rules = (await tx.priceRule.findMany()).map(toRule);
+          const quote = quoteFromRules(rules);
+          const due = amountDue(quote.components);
+          if (quote.totalNaira !== due) {
+            throw new PricingConfigurationError(
+              "Refusing to store a quote whose total does not match its components",
+            );
+          }
+          const row = await tx.order.create({
+            data: orderCreateData(customerId, input, quote),
+          });
+          const created = toPricedOrder(row);
+          await saveIdempotentResult(tx, claim, 201, { data: created });
+          return created;
         });
-      });
-      return toPricedOrder(row);
+        return { outcome: "created" as const, order };
+      } catch (error) {
+        if (!isUniqueViolation(error)) throw error;
+        const saved = await readIdempotentResult(prisma, claim);
+        if (saved.outcome === "fresh") throw error;
+        return saved;
+      }
     },
 
     findOrder,

@@ -160,7 +160,7 @@ Error:
 | 404    | `NOT_FOUND`               | Unknown route or resource                               |
 | 409    | `CONFLICT`                | Uniqueness or state conflict                            |
 | 409    | `IDEMPOTENCY_CONFLICT`    | Same idempotency key, different request                 |
-| 409    | `IDEMPOTENCY_IN_PROGRESS` | That idempotency key is still running                   |
+| 409    | `IDEMPOTENCY_IN_PROGRESS` | That key has no finished result and is not taken over   |
 | 413    | `PAYLOAD_TOO_LARGE`       | JSON body over 100 kB                                   |
 | 429    | `RATE_LIMITED`            | Rate limit exceeded; see `Retry-After`                  |
 | 503    | `SERVICE_UNAVAILABLE`     | A dependency is down (readiness)                        |
@@ -188,7 +188,7 @@ Order is fixed: `createdAt` descending, then `id` descending. `createdAtPage` tu
 
 `POST /api/v1/orders` and any later route that creates an order or records a payment require `Idempotency-Key`. The key is 16 to 128 characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`. A UUID is the usual choice. The key is scoped to the signed-in user and the operation (`orders.create`, and `payments.record` when that route exists), so one key cannot replay a different action.
 
-Mount `idempotency('<scope>')` after `authenticate` and `validate`. A payload that fails validation does not consume the key, so the client can correct it and retry. The first finished response below 500 is stored and replayed, including a conflict, with `Idempotency-Replayed: true`. The same key with a different body is `409 IDEMPOTENCY_CONFLICT`. A second request that arrives while the first is still running is `409 IDEMPOTENCY_IN_PROGRESS`. A 500 does not store a response; the key is released and the client may retry. A lock still marked in progress after 60 seconds is taken over, which is longer than the 30 second request timeout.
+Mount `idempotency('<scope>')` after `authenticate` and `validate`. A payload that fails validation does not reach the key, so the client can correct it and retry. The guard only replays a result that has already committed, and sets `Idempotency-Replayed: true`. The handler writes that result in the same database transaction as the order. If the transaction rolls back, nothing is stored and the retry can proceed. A committed key is not deleted or replaced. The same key with a different body is `409 IDEMPOTENCY_CONFLICT`. A key that has no finished result is left in place, so a retry cannot start a second order (`409 IDEMPOTENCY_IN_PROGRESS`).
 
 ### Audit
 

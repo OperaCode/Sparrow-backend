@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import type { RequestHandler } from "express";
-import type { Logger } from "../../lib/logger.js";
 import type { IdempotencyStore } from "../../types/idempotency.js";
 import { ConflictError, ValidationError } from "../errors.js";
 
@@ -49,11 +48,6 @@ function fingerprint(body: unknown, params: unknown): string {
     .digest("hex");
 }
 
-/** The bytes Express will send, so a replay matches the first response. */
-function wireBody(body: unknown): unknown {
-  return JSON.parse(JSON.stringify(body)) as unknown;
-}
-
 function readKey(header: string | undefined): string {
   if (header === undefined || !KEY_PATTERN.test(header)) {
     throw new ValidationError([
@@ -65,12 +59,12 @@ function readKey(header: string | undefined): string {
 
 /**
  * Runs after authenticate and validate. A rejected payload never reaches
- * here, so correcting it can reuse the key. A stored response is returned
- * as-is. A 5xx is not stored, and the key is released so the client can retry.
+ * here, so correcting it can reuse the key. This guard only replays a result
+ * that has already committed. The handler writes that result in the same
+ * transaction as the order, and this guard never deletes a key.
  */
 export function createIdempotency(
   store: IdempotencyStore,
-  logger: Logger,
 ): (scope: string) => RequestHandler {
   return (scope) => {
     if (!SCOPE_PATTERN.test(scope)) {
@@ -81,68 +75,33 @@ export function createIdempotency(
       if (req.auth === undefined) {
         throw new Error("idempotency must be mounted after authenticate");
       }
-      const key = readKey(req.get(IDEMPOTENCY_KEY_HEADER));
-      const claim = await store.begin({
+      const claim = {
         actorId: req.auth.userId,
         scope,
-        key,
+        key: readKey(req.get(IDEMPOTENCY_KEY_HEADER)),
         requestHash: fingerprint(req.body, req.params),
-      });
+      };
+      const recovery = await store.recover(claim);
 
-      if (claim.outcome === "replay") {
+      if (recovery.outcome === "replay") {
         res.setHeader(IDEMPOTENCY_REPLAYED_HEADER, "true");
-        res.status(claim.statusCode).json(claim.body);
+        res.status(recovery.statusCode).json(recovery.body);
         return;
       }
-      if (claim.outcome === "mismatch") {
+      if (recovery.outcome === "mismatch") {
         throw new ConflictError(
           "This idempotency key was already used for a different request",
           "IDEMPOTENCY_CONFLICT",
         );
       }
-      if (claim.outcome === "in_progress") {
+      if (recovery.outcome === "in_progress") {
         throw new ConflictError(
           "A request with this idempotency key is already in progress",
           "IDEMPOTENCY_IN_PROGRESS",
         );
       }
 
-      const recordId = claim.id;
-      let settled = false;
-      const originalJson = res.json.bind(res);
-
-      // A 5xx is dropped so the same key can be tried once the fault is gone.
-      // Anything else is stored before it is sent, so a retry replays it.
-      async function settle(statusCode: number, body: unknown): Promise<void> {
-        if (statusCode >= 500) {
-          await store.abandon(recordId);
-          return;
-        }
-        await store.complete(recordId, statusCode, wireBody(body));
-      }
-
-      res.json = (body) => {
-        if (settled) return originalJson(body);
-        settled = true;
-        const statusCode = res.statusCode;
-        void (async () => {
-          try {
-            await settle(statusCode, body);
-          } catch (error) {
-            logger.error(
-              { err: error, scope },
-              "Failed to store an idempotency result",
-            );
-            if (statusCode < 500) {
-              next(error);
-              return;
-            }
-          }
-          originalJson(body);
-        })();
-        return res;
-      };
-
+      req.idempotency = claim;
       next();
     };
   };

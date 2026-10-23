@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { createLogger } from "#src/lib/logger.js";
 import type { AuditActor } from "#src/types/auth.js";
+import type { IdempotencyClaim } from "#src/types/idempotency.js";
 import { APPROVED_PRICE_RULES } from "#src/modules/pricing/pricing.catalog.js";
 import type {
   CreatePricedOrderArgs,
   ManualQuoteWriteResult,
   PricingRepository,
 } from "#src/modules/pricing/pricing.repository.js";
-import { createPricingService } from "#src/modules/pricing/pricing.service.js";
+import {
+  createPricingService,
+  type PricingService,
+} from "#src/modules/pricing/pricing.service.js";
 import type {
   PriceRuleRecord,
   PricedOrder,
@@ -23,13 +27,14 @@ interface Memory {
 function memoryRepository(initial: readonly PriceRuleRecord[]): Memory {
   const rules = initial.map((rule) => ({ ...rule }));
   const orders: PricedOrder[] = [];
+  const saved = new Map<string, { hash: string; order: PricedOrder }>();
 
   const repository: PricingRepository = {
     listRules() {
       return Promise.resolve(rules.map((rule) => ({ ...rule })));
     },
 
-    updateRule(component, tier, patch: RuleUpdate, _actor: AuditActor) {
+    updateRule(component, tier, patch: RuleUpdate) {
       const rule = rules.find(
         (item) => item.component === component && item.tier === tier,
       );
@@ -39,7 +44,19 @@ function memoryRepository(initial: readonly PriceRuleRecord[]): Memory {
       return Promise.resolve({ ...rule });
     },
 
-    createPricedOrder({ input, quoteFromRules }: CreatePricedOrderArgs) {
+    createPricedOrder({ input, quoteFromRules, claim }: CreatePricedOrderArgs) {
+      const id = `${claim.actorId}:${claim.scope}:${claim.key}`;
+      const previous = saved.get(id);
+      if (previous !== undefined) {
+        if (previous.hash !== claim.requestHash) {
+          return Promise.resolve({ outcome: "mismatch" });
+        }
+        return Promise.resolve({
+          outcome: "replay",
+          statusCode: 201,
+          body: { data: previous.order },
+        });
+      }
       const quote = quoteFromRules(rules.map((rule) => ({ ...rule })));
       const order: PricedOrder = {
         id: `order-${orders.length + 1}`,
@@ -50,10 +67,12 @@ function memoryRepository(initial: readonly PriceRuleRecord[]): Memory {
         totalNaira: quote.totalNaira,
       };
       orders.push(order);
-      return Promise.resolve({
+      const copy = {
         ...order,
         components: order.components.map((component) => ({ ...component })),
-      });
+      };
+      saved.set(id, { hash: claim.requestHash, order: copy });
+      return Promise.resolve({ outcome: "created", order: copy });
     },
 
     findOrder(id) {
@@ -65,11 +84,7 @@ function memoryRepository(initial: readonly PriceRuleRecord[]): Memory {
       });
     },
 
-    applyManualQuote(
-      id,
-      amountNaira,
-      _actor: AuditActor,
-    ): Promise<ManualQuoteWriteResult> {
+    applyManualQuote(id, amountNaira): Promise<ManualQuoteWriteResult> {
       const order = orders.find((item) => item.id === id);
       if (order === undefined) return Promise.resolve("missing");
       if (order.pricingStatus !== "pending_manual_quote") {
@@ -103,6 +118,29 @@ const admin: AuditActor = {
   requestId: "request-admin-1",
 };
 
+let claimSequence = 0;
+
+function claim(): IdempotencyClaim {
+  claimSequence += 1;
+  return {
+    actorId: "customer-1",
+    scope: "orders.create",
+    key: `orders-create-${String(claimSequence).padStart(8, "0")}`,
+    requestHash: "a".repeat(64),
+  };
+}
+
+async function place(
+  service: PricingService,
+  input: QuoteInput,
+): Promise<PricedOrder> {
+  const result = await service.createOrder("customer-1", input, claim());
+  if (result.outcome !== "created") {
+    throw new Error("expected a new order");
+  }
+  return result.order;
+}
+
 const local: QuoteInput = {
   service: "standard",
   pickup: "igbesa",
@@ -112,7 +150,7 @@ const local: QuoteInput = {
 describe("pricing service", () => {
   it("keeps a snapshotted total after the price list changes", async () => {
     const { service, orders } = serviceWith();
-    const order = await service.createOrder("customer-1", local);
+    const order = await place(service, local);
     expect(order.totalNaira).toBe(800);
 
     await service.updateRule(
@@ -136,7 +174,7 @@ describe("pricing service", () => {
     const { service, orders } = serviceWith();
     const tampered = { ...local, totalNaira: 1 } as QuoteInput;
 
-    const order = await service.createOrder("customer-1", tampered);
+    const order = await place(service, tampered);
 
     expect(order.totalNaira).toBe(800);
     expect(orders[0]?.totalNaira).toBe(800);
@@ -144,7 +182,7 @@ describe("pricing service", () => {
 
   it("stores an agreed manual price without adding it to component amounts", async () => {
     const { service, orders } = serviceWith();
-    const pending = await service.createOrder("customer-1", {
+    const pending = await place(service, {
       service: "special_pickup",
       pickup: "igbesa",
       destination: "igbesa",
@@ -185,7 +223,7 @@ describe("pricing service", () => {
 
   it("refuses to reprice an order that already has an amount due", async () => {
     const { service } = serviceWith();
-    const order = await service.createOrder("customer-1", local);
+    const order = await place(service, local);
 
     await expect(
       service.applyManualQuote(order.id, 5000, admin),
@@ -194,7 +232,7 @@ describe("pricing service", () => {
 
   it("refuses a second manual quote", async () => {
     const { service } = serviceWith();
-    const pending = await service.createOrder("customer-1", {
+    const pending = await place(service, {
       service: "errand",
       errandTier: "complex",
     });
@@ -244,7 +282,7 @@ describe("pricing service", () => {
 
   it("rejects a manual quote that is not a positive whole naira amount", async () => {
     const { service, orders } = serviceWith();
-    const pending = await service.createOrder("customer-1", {
+    const pending = await place(service, {
       service: "errand",
       errandTier: "complex",
     });

@@ -5,18 +5,24 @@ export interface IdempotencyClaim {
   requestHash: string;
 }
 
-export type IdempotencyBegin =
-  | { outcome: 'started'; id: string }
-  | { outcome: 'replay'; statusCode: number; body: unknown }
-  | { outcome: 'mismatch' }
-  | { outcome: 'in_progress' };
+export type IdempotencyRecovery =
+  | { outcome: "fresh" }
+  | { outcome: "replay"; statusCode: number; body: unknown }
+  | { outcome: "mismatch" }
+  | { outcome: "in_progress" };
 
 /**
- * Claims a key before the handler runs, then stores the client response or
- * drops the claim if the handler never produced one.
+ * Reads a result that has already committed. It does not insert, replace, or
+ * delete a key. The write belongs in the same transaction as the order.
  */
 export interface IdempotencyStore {
-  begin(claim: IdempotencyClaim): Promise<IdempotencyBegin>;
-  complete(id: string, statusCode: number, body: unknown): Promise<void>;
-  abandon(id: string): Promise<void>;
+  recover(claim: IdempotencyClaim): Promise<IdempotencyRecovery>;
+}
+
+declare global {
+  namespace Express {
+    interface Request {
+      idempotency?: IdempotencyClaim;
+    }
+  }
 }

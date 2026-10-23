@@ -50,8 +50,9 @@ export function createPricingModules(deps: {
     path: "/orders",
     createRouter({ authenticate, requireRole, idempotency }) {
       const router = Router();
-      // Validate before the key is claimed, so a rejected payload can be
-      // corrected and retried with the same key. Payment routes use this guard.
+      // Validate before the guard, so a rejected payload never reaches the
+      // key. The handler stores the result in the order transaction.
+      // Payment routes use this guard.
       router.post(
         "/",
         authenticate,

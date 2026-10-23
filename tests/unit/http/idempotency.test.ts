@@ -2,18 +2,12 @@ import express from "express";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { ConflictError } from "#src/http/errors.js";
 import { createErrorHandler } from "#src/http/middleware/error-handler.js";
-import {
-  IDEMPOTENCY_REPLAYED_HEADER,
-  createIdempotency,
-} from "#src/http/middleware/idempotency.js";
+import { createIdempotency } from "#src/http/middleware/idempotency.js";
 import { requestId } from "#src/http/middleware/request-id.js";
 import { validate } from "#src/http/middleware/validate.js";
-import { sendData } from "#src/http/response.js";
 import { createLogger } from "#src/lib/logger.js";
 import type {
-  IdempotencyBegin,
   IdempotencyClaim,
   IdempotencyStore,
 } from "#src/types/idempotency.js";
@@ -27,87 +21,60 @@ const bodySchema = z.strictObject({
   destination: z.string().min(1),
 });
 
-interface Stored {
-  id: string;
-  actorId: string;
-  scope: string;
-  key: string;
-  requestHash: string;
+interface Stored extends IdempotencyClaim {
   state: "processing" | "completed";
   statusCode?: number;
   body?: unknown;
 }
 
-function memoryStore(): IdempotencyStore {
+function memoryStore() {
   const rows: Stored[] = [];
-
-  return {
-    begin(claim: IdempotencyClaim): Promise<IdempotencyBegin> {
+  const calls = { recoveries: 0 };
+  const store: IdempotencyStore = {
+    recover(claim) {
+      calls.recoveries += 1;
       const existing = rows.find(
         (row) =>
           row.actorId === claim.actorId &&
           row.scope === claim.scope &&
           row.key === claim.key,
       );
-      if (existing === undefined) {
-        const row: Stored = {
-          id: `record-${rows.length + 1}`,
-          actorId: claim.actorId,
-          scope: claim.scope,
-          key: claim.key,
-          requestHash: claim.requestHash,
-          state: "processing",
-        };
-        rows.push(row);
-        return Promise.resolve({ outcome: "started", id: row.id });
-      }
+      if (existing === undefined) return Promise.resolve({ outcome: "fresh" });
       if (existing.requestHash !== claim.requestHash) {
         return Promise.resolve({ outcome: "mismatch" });
       }
-      if (existing.state === "completed") {
-        return Promise.resolve({
-          outcome: "replay",
-          statusCode: existing.statusCode ?? 500,
-          body: existing.body,
-        });
+      if (
+        existing.state !== "completed" ||
+        existing.statusCode === undefined ||
+        existing.body === undefined
+      ) {
+        return Promise.resolve({ outcome: "in_progress" });
       }
-      return Promise.resolve({ outcome: "in_progress" });
-    },
-
-    complete(id, statusCode, body) {
-      const row = rows.find((item) => item.id === id);
-      if (row === undefined || row.state !== "processing") {
-        return Promise.reject(new Error("not processing"));
-      }
-      row.state = "completed";
-      row.statusCode = statusCode;
-      row.body = body;
-      return Promise.resolve();
-    },
-
-    abandon(id) {
-      const index = rows.findIndex(
-        (row) => row.id === id && row.state === "processing",
-      );
-      if (index >= 0) rows.splice(index, 1);
-      return Promise.resolve();
+      return Promise.resolve({
+        outcome: "replay",
+        statusCode: existing.statusCode,
+        body: existing.body,
+      });
     },
   };
+  return { store, rows, calls };
 }
 
 function buildApp(options: {
   store?: IdempotencyStore;
+  rows?: Stored[];
   authenticate?: boolean;
   failOnce?: { current: boolean };
-  conflict?: boolean;
 }) {
   const capture = createLogCapture();
   const logger = createLogger(
     { level: "info", nodeEnv: "test" },
     capture.stream,
   );
-  const store = options.store ?? memoryStore();
-  const guard = createIdempotency(store, logger);
+  const memory = memoryStore();
+  const store = options.store ?? memory.store;
+  const rows = options.rows ?? memory.rows;
+  const guard = createIdempotency(store);
   const calls = { count: 0 };
   const app = express();
   app.use(requestId);
@@ -124,25 +91,29 @@ function buildApp(options: {
     guard("orders.create"),
     (req, res) => {
       calls.count += 1;
+      const claim = req.idempotency;
+      if (claim === undefined) {
+        throw new Error("createOrder requires an idempotency claim");
+      }
       if (options.failOnce?.current === true) {
         options.failOnce.current = false;
         throw new Error("downstream");
       }
-      if (options.conflict === true && calls.count === 1) {
-        throw new ConflictError("Order cannot be created");
-      }
       const body = req.body as { destination: string };
-      sendData(
-        res,
-        { id: "order-1", destination: body.destination },
-        {
-          status: 201,
-        },
-      );
+      const response = {
+        data: { id: "order-1", destination: body.destination },
+      };
+      rows.push({
+        ...claim,
+        state: "completed",
+        statusCode: 201,
+        body: response,
+      });
+      res.status(201).json(response);
     },
   );
   app.use(createErrorHandler(logger));
-  return { app, calls, capture, store };
+  return { app, calls, capture, store, rows };
 }
 
 function post(
@@ -156,24 +127,27 @@ function post(
 }
 
 describe("idempotency", () => {
-  it("rejects a missing or malformed key before the handler runs", async () => {
-    const { app, calls, store } = buildApp({});
-    let began = false;
-    store.begin = () => {
-      began = true;
-      return Promise.resolve({ outcome: "in_progress" });
-    };
+  it("rejects a missing or malformed key before reading the store", async () => {
+    const seen = { recoveries: 0 };
+    const { app, calls } = buildApp({
+      store: {
+        recover() {
+          seen.recoveries += 1;
+          return Promise.resolve({ outcome: "fresh" });
+        },
+      },
+    });
 
     const missing = await post(app, undefined, "igbesa").expect(400);
     const malformed = await post(app, "short", "igbesa").expect(400);
 
     expect(errorOf(missing).details).toEqual(errorOf(malformed).details);
     expect(errorOf(missing).details?.[0]?.path).toBe("header.Idempotency-Key");
-    expect(began).toBe(false);
+    expect(seen.recoveries).toBe(0);
     expect(calls.count).toBe(0);
   });
 
-  it("replays the first response and does not run the handler again", async () => {
+  it("replays a result stored with the order and does not run the handler again", async () => {
     const { app, calls } = buildApp({});
 
     const first = await post(app, KEY, "igbesa").expect(201);
@@ -194,14 +168,15 @@ describe("idempotency", () => {
     expect(calls.count).toBe(1);
   });
 
-  it("does not claim a key when the payload fails validation", async () => {
-    const { app, store } = buildApp({});
-    let began = false;
-    const begin = store.begin.bind(store);
-    store.begin = (claim) => {
-      began = true;
-      return begin(claim);
+  it("does not read the store when the payload fails validation", async () => {
+    const memory = memoryStore();
+    const recover = memory.store.recover.bind(memory.store);
+    let recoveries = 0;
+    memory.store.recover = (claim) => {
+      recoveries += 1;
+      return recover(claim);
     };
+    const { app } = buildApp({ store: memory.store, rows: memory.rows });
 
     await request(app)
       .post("/orders")
@@ -209,44 +184,32 @@ describe("idempotency", () => {
       .send({ destination: "" })
       .expect(400);
 
-    expect(began).toBe(false);
+    expect(recoveries).toBe(0);
     await post(app, KEY, "igbesa").expect(201);
   });
 
-  it("releases the key when the handler fails unexpectedly", async () => {
+  it("leaves no record when the handler fails before anything commits", async () => {
     const failOnce = { current: true };
-    const { app } = buildApp({ failOnce });
+    const { app, calls, rows } = buildApp({ failOnce });
 
     await post(app, KEY, "igbesa").expect(500);
+    expect(rows).toHaveLength(0);
+
     const retried = await post(app, KEY, "igbesa").expect(201);
 
     expect(retried.headers["idempotency-replayed"]).toBeUndefined();
     expect(retried.body).toEqual({
       data: { id: "order-1", destination: "igbesa" },
     });
+    expect(calls.count).toBe(2);
   });
 
-  it("replays a stored conflict instead of running the action again", async () => {
-    const { app, calls } = buildApp({ conflict: true });
-
-    const first = await post(app, KEY, "igbesa").expect(409);
-    const second = await post(app, KEY, "igbesa").expect(409);
-
-    expect(errorOf(first).code).toBe("CONFLICT");
-    expect(second.headers[IDEMPOTENCY_REPLAYED_HEADER.toLowerCase()]).toBe(
-      "true",
-    );
-    expect(second.body).toEqual(first.body);
-    expect(calls.count).toBe(1);
-  });
-
-  it("reports a key that is still in progress", async () => {
-    const store: IdempotencyStore = {
-      begin: () => Promise.resolve({ outcome: "in_progress" }),
-      complete: () => Promise.resolve(),
-      abandon: () => Promise.resolve(),
-    };
-    const { app, calls } = buildApp({ store });
+  it("does not take over a key that has no finished result", async () => {
+    const { app, calls } = buildApp({
+      store: {
+        recover: () => Promise.resolve({ outcome: "in_progress" }),
+      },
+    });
 
     const response = await post(app, KEY, "igbesa").expect(409);
 
@@ -266,13 +229,7 @@ describe("idempotency", () => {
   });
 
   it("rejects a scope that is not an operation name", () => {
-    const capture = createLogCapture();
-    const logger = createLogger(
-      { level: "silent", nodeEnv: "test" },
-      capture.stream,
-    );
-
-    expect(() => createIdempotency(memoryStore(), logger)("Orders")).toThrow(
+    expect(() => createIdempotency(memoryStore().store)("Orders")).toThrow(
       /Invalid idempotency scope/,
     );
   });

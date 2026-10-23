@@ -341,6 +341,109 @@ describe("pricing authority", () => {
 
     expect(errorOf(response).code).toBe("SERVICE_UNAVAILABLE");
   });
+
+  it("returns the original order when the same key is submitted twice", async () => {
+    const customer = await account("+2348040000018");
+    const key = "orders-create-same-key-1";
+
+    const first = await request(app)
+      .post("/api/v1/orders")
+      .set("Authorization", `Bearer ${customer.token}`)
+      .set("Idempotency-Key", key)
+      .send(local)
+      .expect(201);
+    const second = await request(app)
+      .post("/api/v1/orders")
+      .set("Authorization", `Bearer ${customer.token}`)
+      .set("Idempotency-Key", key)
+      .send(local)
+      .expect(201);
+
+    expect(second.headers["idempotency-replayed"]).toBe("true");
+    expect(dataOf(second).id).toBe(dataOf(first).id);
+    expect(await prisma.order.count()).toBe(1);
+
+    const records = await prisma.idempotencyRecord.findMany();
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ state: "completed", statusCode: 201 });
+    const stored = records[0]?.responseBody as { data: { id: string } };
+    expect(stored.data.id).toBe(dataOf(first).id);
+  });
+
+  it("rejects the same key when the order body differs", async () => {
+    const customer = await account("+2348040000019");
+    const key = "orders-create-same-key-2";
+
+    await request(app)
+      .post("/api/v1/orders")
+      .set("Authorization", `Bearer ${customer.token}`)
+      .set("Idempotency-Key", key)
+      .send(local)
+      .expect(201);
+    const response = await request(app)
+      .post("/api/v1/orders")
+      .set("Authorization", `Bearer ${customer.token}`)
+      .set("Idempotency-Key", key)
+      .send({ ...local, destination: "lusada" })
+      .expect(409);
+
+    expect(errorOf(response).code).toBe("IDEMPOTENCY_CONFLICT");
+    expect(await prisma.order.count()).toBe(1);
+  });
+
+  it("keeps a single order when two identical creates race", async () => {
+    const customer = await account("+2348040000020");
+    const key = "orders-create-same-key-3";
+    const send = () =>
+      request(app)
+        .post("/api/v1/orders")
+        .set("Authorization", `Bearer ${customer.token}`)
+        .set("Idempotency-Key", key)
+        .send(local);
+
+    const [left, right] = await Promise.all([send(), send()]);
+
+    expect(left.status).toBe(201);
+    expect(right.status).toBe(201);
+    expect(dataOf(left).id).toBe(dataOf(right).id);
+    expect(await prisma.order.count()).toBe(1);
+    expect(await prisma.idempotencyRecord.count()).toBe(1);
+  });
+
+  it("does not store the key when pricing fails before an order exists", async () => {
+    const customer = await account("+2348040000021");
+    const key = "orders-create-same-key-4";
+    await prisma.priceRule.deleteMany();
+
+    const failed = await request(app)
+      .post("/api/v1/orders")
+      .set("Authorization", `Bearer ${customer.token}`)
+      .set("Idempotency-Key", key)
+      .send(local)
+      .expect(503);
+
+    expect(errorOf(failed).code).toBe("SERVICE_UNAVAILABLE");
+    expect(await prisma.order.count()).toBe(0);
+    expect(await prisma.idempotencyRecord.count()).toBe(0);
+
+    await seedApprovedPrices(prisma);
+    const created = await request(app)
+      .post("/api/v1/orders")
+      .set("Authorization", `Bearer ${customer.token}`)
+      .set("Idempotency-Key", key)
+      .send(local)
+      .expect(201);
+    const replay = await request(app)
+      .post("/api/v1/orders")
+      .set("Authorization", `Bearer ${customer.token}`)
+      .set("Idempotency-Key", key)
+      .send(local)
+      .expect(201);
+
+    expect(replay.headers["idempotency-replayed"]).toBe("true");
+    expect(dataOf(replay).id).toBe(dataOf(created).id);
+    expect(await prisma.order.count()).toBe(1);
+  });
 });
 
 describe("pricing database constraints", () => {
