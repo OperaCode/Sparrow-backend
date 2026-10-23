@@ -112,6 +112,13 @@ function tokensOf(response: Response): Tokens {
   return (response.body as { data: { tokens: Tokens } }).data.tokens;
 }
 
+/** Moves the last rotation past the default 30 second reuse grace window. */
+async function backdateLastRefresh(): Promise<void> {
+  await prisma.authSession.updateMany({
+    data: { lastRefreshedAt: new Date(Date.now() - 60_000) },
+  });
+}
+
 async function signIn(
   auth: AuthApp,
   label = 'sign-in',
@@ -340,7 +347,45 @@ describe('POST /api/v1/auth/refresh', () => {
     await refresh(auth.app, next.refreshToken).expect(200);
   });
 
-  it('revokes the session when a superseded refresh token is replayed', async () => {
+  it('revokes the session when the previous refresh token is replayed after the grace window', async () => {
+    const auth = authApp();
+    const { tokens } = await signIn(auth);
+    const next = tokensOf(
+      await refresh(auth.app, tokens.refreshToken).expect(200),
+    );
+    await backdateLastRefresh();
+
+    const replay = await refresh(auth.app, tokens.refreshToken).expect(401);
+
+    expect(errorOf(replay).code).toBe('UNAUTHENTICATED');
+    await callProtected(auth.app, next.accessToken).expect(401);
+    await refresh(auth.app, next.refreshToken).expect(401);
+    const session = await prisma.authSession.findFirstOrThrow();
+    expect(session.revokedReason).toBe('refresh_reuse');
+  });
+
+  it('keeps the session id and user id out of the reuse warning message', async () => {
+    const auth = authApp();
+    const { tokens } = await signIn(auth);
+    await refresh(auth.app, tokens.refreshToken).expect(200);
+    await backdateLastRefresh();
+
+    await refresh(auth.app, tokens.refreshToken).expect(401);
+
+    const session = await prisma.authSession.findFirstOrThrow();
+    const warning = auth.moduleLogs.lines.find(
+      (line) => line.msg === 'Refresh token reuse detected; session revoked',
+    );
+    expect(warning).toMatchObject({
+      level: 40,
+      sessionId: session.id,
+      userId: session.userId,
+    });
+    expect(warning?.msg).not.toContain(session.id);
+    expect(warning?.msg).not.toContain(session.userId);
+  });
+
+  it('refuses the previous refresh token inside the grace window without revoking', async () => {
     const auth = authApp();
     const { tokens } = await signIn(auth);
     const next = tokensOf(
@@ -350,18 +395,27 @@ describe('POST /api/v1/auth/refresh', () => {
     const replay = await refresh(auth.app, tokens.refreshToken).expect(401);
 
     expect(errorOf(replay).code).toBe('UNAUTHENTICATED');
-    await callProtected(auth.app, next.accessToken).expect(401);
-    await refresh(auth.app, next.refreshToken).expect(401);
+    await callProtected(auth.app, next.accessToken).expect(200);
+    await refresh(auth.app, next.refreshToken).expect(200);
     const session = await prisma.authSession.findFirstOrThrow();
-    expect(session.revokedReason).toBe('refresh_reuse');
-    expect(auth.moduleLogs.lines).toContainEqual(
-      expect.objectContaining({
-        level: 40,
-        msg: 'Refresh token reuse detected; session revoked',
-        sessionId: session.id,
-        userId: session.userId,
-      }),
-    );
+    expect(session.revokedAt).toBeNull();
+  });
+
+  it('does not revoke a session when a random secret is sent for its id', async () => {
+    const auth = authApp();
+    const { tokens } = await signIn(auth);
+    const sessionId = tokens.refreshToken.split('.')[0] ?? '';
+
+    const forged = await refresh(
+      auth.app,
+      `${sessionId}.${'a'.repeat(43)}`,
+    ).expect(401);
+
+    expect(errorOf(forged).code).toBe('UNAUTHENTICATED');
+    await callProtected(auth.app, tokens.accessToken).expect(200);
+    await refresh(auth.app, tokens.refreshToken).expect(200);
+    const session = await prisma.authSession.findFirstOrThrow();
+    expect(session.revokedAt).toBeNull();
   });
 
   it('returns 401 for a well-formed token that matches no session', async () => {

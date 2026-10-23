@@ -22,6 +22,7 @@ export interface RotateSessionInput {
   presentedHash: Uint8Array<ArrayBuffer>;
   nextHash: Uint8Array<ArrayBuffer>;
   refreshTtlSeconds: number;
+  reuseGraceSeconds: number;
 }
 
 export interface RotatedSession extends SessionExpiry {
@@ -88,13 +89,15 @@ export function createSessionsRepository(
     /**
      * One compare-and-swap on the current hash, so two requests presenting
      * the same token cannot both rotate it. The sliding expiry never passes
-     * the absolute expiry. The owner's status comes back in the same round
-     * trip so a suspended user can be refused.
+     * the absolute expiry. The superseded hash is kept for reuse detection.
+     * The owner's status comes back in the same round trip so a suspended
+     * user can be refused.
      */
     async rotate(input) {
       const rotated = await prisma.$queryRaw<RotatedSession[]>`
         UPDATE "auth_sessions"
         SET
+          "previous_refresh_token_hash" = "refresh_token_hash",
           "refresh_token_hash" = ${input.nextHash},
           "refresh_expires_at" = LEAST(
             now() + CAST(${input.refreshTtlSeconds} AS integer) * interval '1 second',
@@ -119,15 +122,20 @@ export function createSessionsRepository(
       const session = rotated[0];
       if (session !== undefined) return { status: 'rotated', session };
 
-      // A live session whose hash differs means a superseded token was
-      // replayed. Either the client or an attacker holds a stale copy, so
-      // the whole session is revoked.
+      // Only the token this session actually issued last counts as reuse, so
+      // knowing a session id is not enough to revoke it. Inside the grace
+      // window the replay is most likely the client's own parallel refresh,
+      // which is refused without revoking. Older or unknown hashes are
+      // refused without changes.
       const revoked = await prisma.$queryRaw<{ userId: string }[]>`
         UPDATE "auth_sessions"
         SET "revoked_at" = now(), "revoked_reason" = 'refresh_reuse'
         WHERE "id" = CAST(${input.sessionId} AS uuid)
           AND "revoked_at" IS NULL
-          AND "refresh_token_hash" <> ${input.presentedHash}
+          AND "refresh_expires_at" > now()
+          AND "absolute_expires_at" > now()
+          AND "previous_refresh_token_hash" = ${input.presentedHash}
+          AND "last_refreshed_at" <= now() - CAST(${input.reuseGraceSeconds} AS integer) * interval '1 second'
         RETURNING "user_id" AS "userId"
       `;
       const reused = revoked[0];

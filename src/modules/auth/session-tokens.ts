@@ -101,6 +101,7 @@ export function createSessionTokens(
         presentedHash: token.hash,
         nextHash: next.hash,
         refreshTtlSeconds,
+        reuseGraceSeconds: session.refreshReuseGraceSeconds,
       });
       if (result.status !== 'rotated') return result;
       if (result.session.userStatus !== 'active') {

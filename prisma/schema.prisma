@@ -52,18 +52,19 @@ enum SessionRevokedReason {
 /// sign-in can open at most one session. Length and expiry invariants are
 /// CHECK constraints in the migration.
 model AuthSession {
-  id                String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId            String                @map("user_id") @db.Uuid
-  user              User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  firebaseUid       String                @map("firebase_uid") @db.VarChar(128)
-  firebaseAuthTime  DateTime              @map("firebase_auth_time") @db.Timestamptz(3)
-  refreshTokenHash  Bytes                 @map("refresh_token_hash")
-  refreshExpiresAt  DateTime              @map("refresh_expires_at") @db.Timestamptz(3)
-  absoluteExpiresAt DateTime              @map("absolute_expires_at") @db.Timestamptz(3)
-  lastRefreshedAt   DateTime?             @map("last_refreshed_at") @db.Timestamptz(3)
-  revokedAt         DateTime?             @map("revoked_at") @db.Timestamptz(3)
-  revokedReason     SessionRevokedReason? @map("revoked_reason")
-  createdAt         DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                       String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                   String                @map("user_id") @db.Uuid
+  user                     User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  firebaseUid              String                @map("firebase_uid") @db.VarChar(128)
+  firebaseAuthTime         DateTime              @map("firebase_auth_time") @db.Timestamptz(3)
+  refreshTokenHash         Bytes                 @map("refresh_token_hash")
+  previousRefreshTokenHash Bytes?                @map("previous_refresh_token_hash")
+  refreshExpiresAt         DateTime              @map("refresh_expires_at") @db.Timestamptz(3)
+  absoluteExpiresAt        DateTime              @map("absolute_expires_at") @db.Timestamptz(3)
+  lastRefreshedAt          DateTime?             @map("last_refreshed_at") @db.Timestamptz(3)
+  revokedAt                DateTime?             @map("revoked_at") @db.Timestamptz(3)
+  revokedReason            SessionRevokedReason? @map("revoked_reason")
+  createdAt                DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@unique([firebaseUid, firebaseAuthTime])
   @@index([userId])

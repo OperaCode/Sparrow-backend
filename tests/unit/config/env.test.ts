@@ -51,6 +51,7 @@ describe('loadConfig', () => {
         refreshTokenTtlDays: 30,
         maxAgeDays: 90,
         maxFirebaseAuthAgeSeconds: 300,
+        refreshReuseGraceSeconds: 30,
       },
       authRateLimit: {
         exchange: { windowMs: 900_000, max: 30 },
@@ -67,6 +68,7 @@ describe('loadConfig', () => {
         AUTH_REFRESH_TOKEN_TTL_DAYS: '14',
         AUTH_SESSION_MAX_AGE_DAYS: '60',
         AUTH_FIREBASE_MAX_AUTH_AGE_SECONDS: '120',
+        AUTH_REFRESH_REUSE_GRACE_SECONDS: '0',
         AUTH_EXCHANGE_RATE_LIMIT_WINDOW_MS: '60000',
         AUTH_EXCHANGE_RATE_LIMIT_MAX: '5',
         AUTH_REFRESH_RATE_LIMIT_WINDOW_MS: '120000',
@@ -79,6 +81,7 @@ describe('loadConfig', () => {
       refreshTokenTtlDays: 14,
       maxAgeDays: 60,
       maxFirebaseAuthAgeSeconds: 120,
+      refreshReuseGraceSeconds: 0,
     });
     expect(config.authRateLimit).toEqual({
       exchange: { windowMs: 60_000, max: 5 },
@@ -348,6 +351,9 @@ describe('loadConfig', () => {
     ['AUTH_SESSION_MAX_AGE_DAYS', '366'],
     ['AUTH_FIREBASE_MAX_AUTH_AGE_SECONDS', '29'],
     ['AUTH_FIREBASE_MAX_AUTH_AGE_SECONDS', '3601'],
+    ['AUTH_REFRESH_REUSE_GRACE_SECONDS', '-1'],
+    ['AUTH_REFRESH_REUSE_GRACE_SECONDS', '301'],
+    ['AUTH_REFRESH_REUSE_GRACE_SECONDS', '2.5'],
     ['AUTH_EXCHANGE_RATE_LIMIT_WINDOW_MS', '999'],
     ['AUTH_EXCHANGE_RATE_LIMIT_MAX', '0'],
     ['AUTH_REFRESH_RATE_LIMIT_WINDOW_MS', 'not-a-number'],

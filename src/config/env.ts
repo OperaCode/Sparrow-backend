@@ -87,6 +87,12 @@ const envSchema = z.object({
     .min(30)
     .max(3600)
     .default(300),
+  AUTH_REFRESH_REUSE_GRACE_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(300)
+    .default(30),
   AUTH_EXCHANGE_RATE_LIMIT_WINDOW_MS:
     windowMsSchema.default(FIFTEEN_MINUTES_MS),
   AUTH_EXCHANGE_RATE_LIMIT_MAX: maxRequestsSchema.default(30),
@@ -119,6 +125,7 @@ export interface Config {
     refreshTokenTtlDays: number;
     maxAgeDays: number;
     maxFirebaseAuthAgeSeconds: number;
+    refreshReuseGraceSeconds: number;
   }>;
   readonly authRateLimit: Readonly<{
     exchange: Readonly<RateLimitConfig>;
@@ -217,6 +224,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
       refreshTokenTtlDays: env.AUTH_REFRESH_TOKEN_TTL_DAYS,
       maxAgeDays: env.AUTH_SESSION_MAX_AGE_DAYS,
       maxFirebaseAuthAgeSeconds: env.AUTH_FIREBASE_MAX_AUTH_AGE_SECONDS,
+      refreshReuseGraceSeconds: env.AUTH_REFRESH_REUSE_GRACE_SECONDS,
     }),
     authRateLimit: Object.freeze({
       exchange: Object.freeze({

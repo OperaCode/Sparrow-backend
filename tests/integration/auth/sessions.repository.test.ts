@@ -21,6 +21,7 @@ const DAY_SECONDS = 24 * 60 * 60;
 const DAY_MS = DAY_SECONDS * 1000;
 const REFRESH_TTL_SECONDS = 30 * DAY_SECONDS;
 const MAX_AGE_SECONDS = 90 * DAY_SECONDS;
+const GRACE_SECONDS = 30;
 const UNKNOWN_SESSION_ID = '3f0e0c9a-6b1e-4c43-9a51-2c4b0f6d8a11';
 
 async function databaseNow(): Promise<number> {
@@ -73,6 +74,33 @@ async function setExpiries(
   });
 }
 
+function rotate(
+  sessionId: string,
+  presentedHash: Uint8Array<ArrayBuffer>,
+  nextHash: Uint8Array<ArrayBuffer> = generateRefreshSecret().hash,
+  reuseGraceSeconds: number = GRACE_SECONDS,
+) {
+  return repository.rotate({
+    sessionId,
+    presentedHash,
+    nextHash,
+    refreshTtlSeconds: REFRESH_TTL_SECONDS,
+    reuseGraceSeconds,
+  });
+}
+
+/** Moves the last rotation into the past instead of waiting out the window. */
+async function backdateLastRefresh(
+  id: string,
+  secondsAgo: number,
+): Promise<void> {
+  const now = await databaseNow();
+  await prisma.authSession.update({
+    where: { id },
+    data: { lastRefreshedAt: new Date(now - secondsAgo * 1000) },
+  });
+}
+
 describe('sessions repository: create', () => {
   it('stores the hash and sets idle and absolute expiry from now', async () => {
     const before = await databaseNow();
@@ -114,18 +142,13 @@ describe('sessions repository: create', () => {
 });
 
 describe('sessions repository: rotate', () => {
-  it('swaps the hash, slides the idle expiry and records the refresh', async () => {
+  it('swaps the hash, keeps the old one as previous, slides the idle expiry and records the refresh', async () => {
     const { session, userId, hash } = await openSession();
     await setExpiries(session.id, DAY_MS, 60 * DAY_MS);
     const next = generateRefreshSecret();
     const before = await databaseNow();
 
-    const result = await repository.rotate({
-      sessionId: session.id,
-      presentedHash: hash,
-      nextHash: next.hash,
-      refreshTtlSeconds: REFRESH_TTL_SECONDS,
-    });
+    const result = await rotate(session.id, hash, next.hash);
 
     expect(result).toMatchObject({
       status: 'rotated',
@@ -133,6 +156,7 @@ describe('sessions repository: rotate', () => {
     });
     const stored = await storedSession(session.id);
     expect(stored.refreshTokenHash).toEqual(next.hash);
+    expect(stored.previousRefreshTokenHash).toEqual(hash);
     expect(stored.lastRefreshedAt).not.toBeNull();
     expectAbout(stored.refreshExpiresAt, before + REFRESH_TTL_SECONDS * 1000);
   });
@@ -141,65 +165,107 @@ describe('sessions repository: rotate', () => {
     const { session, hash } = await openSession();
     await setExpiries(session.id, DAY_MS, DAY_MS);
 
-    const result = await repository.rotate({
-      sessionId: session.id,
-      presentedHash: hash,
-      nextHash: generateRefreshSecret().hash,
-      refreshTtlSeconds: REFRESH_TTL_SECONDS,
-    });
+    const result = await rotate(session.id, hash);
 
     expect(result.status).toBe('rotated');
     const stored = await storedSession(session.id);
     expect(stored.refreshExpiresAt).toEqual(stored.absoluteExpiresAt);
   });
 
-  it('revokes the session when a superseded token is replayed', async () => {
+  it('refuses the previous token inside the grace window without revoking', async () => {
     const { session, userId, hash } = await openSession();
     const next = generateRefreshSecret();
-    await repository.rotate({
-      sessionId: session.id,
-      presentedHash: hash,
-      nextHash: next.hash,
-      refreshTtlSeconds: REFRESH_TTL_SECONDS,
-    });
+    await rotate(session.id, hash, next.hash);
 
-    const replay = await repository.rotate({
-      sessionId: session.id,
-      presentedHash: hash,
-      nextHash: generateRefreshSecret().hash,
-      refreshTtlSeconds: REFRESH_TTL_SECONDS,
+    const replay = await rotate(session.id, hash);
+
+    expect(replay).toEqual({ status: 'invalid' });
+    const stored = await storedSession(session.id);
+    expect(stored.revokedAt).toBeNull();
+    expect(stored.refreshTokenHash).toEqual(next.hash);
+    await expect(rotate(session.id, next.hash)).resolves.toMatchObject({
+      status: 'rotated',
+      session: { userId },
     });
+  });
+
+  it('revokes the session when the previous token is replayed after the grace window', async () => {
+    const { session, userId, hash } = await openSession();
+    const next = generateRefreshSecret();
+    await rotate(session.id, hash, next.hash);
+    await backdateLastRefresh(session.id, GRACE_SECONDS + 1);
+
+    const replay = await rotate(session.id, hash);
 
     expect(replay).toEqual({ status: 'reused', userId });
     const stored = await storedSession(session.id);
     expect(stored.revokedReason).toBe('refresh_reuse');
     expect(stored.revokedAt).not.toBeNull();
-
-    const current = await repository.rotate({
-      sessionId: session.id,
-      presentedHash: next.hash,
-      nextHash: generateRefreshSecret().hash,
-      refreshTtlSeconds: REFRESH_TTL_SECONDS,
+    await expect(rotate(session.id, next.hash)).resolves.toEqual({
+      status: 'invalid',
     });
-    expect(current).toEqual({ status: 'invalid' });
   });
 
-  it('lets exactly one of two concurrent rotations win', async () => {
-    const { session, hash } = await openSession();
-    const attempt = () =>
-      repository.rotate({
-        sessionId: session.id,
-        presentedHash: hash,
-        nextHash: generateRefreshSecret().hash,
-        refreshTtlSeconds: REFRESH_TTL_SECONDS,
-      });
+  it('revokes on any replay of the previous token when the grace window is zero', async () => {
+    const { session, userId, hash } = await openSession();
+    await rotate(session.id, hash);
 
-    const results = await Promise.all([attempt(), attempt()]);
+    const replay = await rotate(session.id, hash, undefined, 0);
+
+    expect(replay).toEqual({ status: 'reused', userId });
+  });
+
+  it('does not revoke a session when a random secret is presented for its id', async () => {
+    const { session, hash } = await openSession();
+    const next = generateRefreshSecret();
+    await rotate(session.id, hash, next.hash);
+    await backdateLastRefresh(session.id, GRACE_SECONDS + 1);
+
+    const forged = await rotate(session.id, generateRefreshSecret().hash);
+
+    expect(forged).toEqual({ status: 'invalid' });
+    const stored = await storedSession(session.id);
+    expect(stored.revokedAt).toBeNull();
+    expect(stored.refreshTokenHash).toEqual(next.hash);
+  });
+
+  it('does not revoke a never-rotated session when a random secret is presented', async () => {
+    const { session, hash } = await openSession();
+
+    const forged = await rotate(session.id, generateRefreshSecret().hash);
+
+    expect(forged).toEqual({ status: 'invalid' });
+    const stored = await storedSession(session.id);
+    expect(stored.revokedAt).toBeNull();
+    expect(stored.refreshTokenHash).toEqual(hash);
+  });
+
+  it('refuses a token two rotations old without revoking', async () => {
+    const { session, hash } = await openSession();
+    const second = generateRefreshSecret();
+    await rotate(session.id, hash, second.hash);
+    await rotate(session.id, second.hash);
+    await backdateLastRefresh(session.id, GRACE_SECONDS + 1);
+
+    const replay = await rotate(session.id, hash);
+
+    expect(replay).toEqual({ status: 'invalid' });
+    const stored = await storedSession(session.id);
+    expect(stored.revokedAt).toBeNull();
+  });
+
+  it('lets exactly one of two concurrent rotations win without revoking', async () => {
+    const { session, hash } = await openSession();
+
+    const results = await Promise.all([
+      rotate(session.id, hash),
+      rotate(session.id, hash),
+    ]);
 
     const statuses = results.map((result) => result.status).sort();
-    expect(statuses).toEqual(['reused', 'rotated']);
+    expect(statuses).toEqual(['invalid', 'rotated']);
     const stored = await storedSession(session.id);
-    expect(stored.revokedReason).toBe('refresh_reuse');
+    expect(stored.revokedAt).toBeNull();
   });
 
   it.each<[string, number, number]>([
@@ -211,12 +277,7 @@ describe('sessions repository: rotate', () => {
       const { session, hash } = await openSession();
       await setExpiries(session.id, refreshMs, absoluteMs);
 
-      const result = await repository.rotate({
-        sessionId: session.id,
-        presentedHash: hash,
-        nextHash: generateRefreshSecret().hash,
-        refreshTtlSeconds: REFRESH_TTL_SECONDS,
-      });
+      const result = await rotate(session.id, hash);
 
       expect(result).toEqual({ status: 'invalid' });
       const stored = await storedSession(session.id);
@@ -225,16 +286,24 @@ describe('sessions repository: rotate', () => {
     },
   );
 
+  it('does not revoke an expired session when its previous token is replayed', async () => {
+    const { session, hash } = await openSession();
+    await rotate(session.id, hash);
+    await backdateLastRefresh(session.id, GRACE_SECONDS + 1);
+    await setExpiries(session.id, -1_000, 60 * DAY_MS);
+
+    const replay = await rotate(session.id, hash);
+
+    expect(replay).toEqual({ status: 'invalid' });
+    const stored = await storedSession(session.id);
+    expect(stored.revokedAt).toBeNull();
+  });
+
   it('rejects a revoked session', async () => {
     const { session, hash } = await openSession();
     await repository.revokeForLogout(session.id, hash);
 
-    const result = await repository.rotate({
-      sessionId: session.id,
-      presentedHash: hash,
-      nextHash: generateRefreshSecret().hash,
-      refreshTtlSeconds: REFRESH_TTL_SECONDS,
-    });
+    const result = await rotate(session.id, hash);
 
     expect(result).toEqual({ status: 'invalid' });
     const stored = await storedSession(session.id);
@@ -242,12 +311,10 @@ describe('sessions repository: rotate', () => {
   });
 
   it('rejects an unknown session id', async () => {
-    const result = await repository.rotate({
-      sessionId: UNKNOWN_SESSION_ID,
-      presentedHash: generateRefreshSecret().hash,
-      nextHash: generateRefreshSecret().hash,
-      refreshTtlSeconds: REFRESH_TTL_SECONDS,
-    });
+    const result = await rotate(
+      UNKNOWN_SESSION_ID,
+      generateRefreshSecret().hash,
+    );
 
     expect(result).toEqual({ status: 'invalid' });
   });

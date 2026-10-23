@@ -66,28 +66,29 @@ If port 5433 is already in use, set `POSTGRES_PORT` in `.env` to a free port and
 
 All variables are validated at startup by `src/config/env.ts`. On invalid configuration the server exits and prints the failing variable names, never their values. See `.env.example` for the documented defaults.
 
-| Variable                                                             | Required     | Default                                 | Notes                                                                        |
-| -------------------------------------------------------------------- | ------------ | --------------------------------------- | ---------------------------------------------------------------------------- |
-| `NODE_ENV`                                                           | Yes          | none                                    | `development`, `test` or `production`                                        |
-| `PORT`                                                               | No           | `4000`                                  |                                                                              |
-| `LOG_LEVEL`                                                          | No           | `info`                                  | Pino level                                                                   |
-| `DATABASE_URL`                                                       | Yes          | none                                    | `postgresql://` URL                                                          |
-| `JWT_ACCESS_SECRET`                                                  | Yes          | none                                    | At least 32 characters                                                       |
-| `JWT_ISSUER`                                                         | No           | `sparrow-api`                           |                                                                              |
-| `JWT_AUDIENCE`                                                       | No           | `sparrow-app`                           |                                                                              |
-| `CORS_ORIGINS`                                                       | No           | empty                                   | Comma-separated origins; must be https in production                         |
-| `TRUST_PROXY`                                                        | No           | `0`                                     | Proxy hops in front of the API; `1` on Render                                |
-| `RATE_LIMIT_WINDOW_MS`                                               | No           | `60000`                                 |                                                                              |
-| `RATE_LIMIT_MAX`                                                     | No           | `100`                                   | Requests per window per client IP on `/api`                                  |
-| `FIREBASE_SERVICE_ACCOUNT_BASE64`                                    | Production   | empty                                   | Base64 of the service account JSON key file; without it, sign-in returns 503 |
-| `AUTH_ACCESS_TOKEN_TTL_SECONDS`                                      | No           | `900`                                   | 60 to 3600                                                                   |
-| `AUTH_REFRESH_TOKEN_TTL_DAYS`                                        | No           | `30`                                    | Idle timeout; must not exceed the session max age                            |
-| `AUTH_SESSION_MAX_AGE_DAYS`                                          | No           | `90`                                    | Absolute session lifetime, then a new OTP                                    |
-| `AUTH_FIREBASE_MAX_AUTH_AGE_SECONDS`                                 | No           | `300`                                   | How recent the OTP sign-in must be to exchange it                            |
-| `AUTH_EXCHANGE_RATE_LIMIT_WINDOW_MS`, `AUTH_EXCHANGE_RATE_LIMIT_MAX` | No           | `900000`, `30`                          | Per-IP limit on `POST /auth/firebase`                                        |
-| `AUTH_REFRESH_RATE_LIMIT_WINDOW_MS`, `AUTH_REFRESH_RATE_LIMIT_MAX`   | No           | `900000`, `30`                          | Per-IP limit shared by refresh and logout                                    |
-| `TEST_DATABASE_URL`                                                  | Tests only   | `...5433/sparrow_test`                  | Name must end in `_test`                                                     |
-| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT` | Compose only | `sparrow`, `sparrow`, `sparrow`, `5433` | Local database container                                                     |
+| Variable                                                             | Required     | Default                                 | Notes                                                                                                 |
+| -------------------------------------------------------------------- | ------------ | --------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                                                           | Yes          | none                                    | `development`, `test` or `production`                                                                 |
+| `PORT`                                                               | No           | `4000`                                  |                                                                                                       |
+| `LOG_LEVEL`                                                          | No           | `info`                                  | Pino level                                                                                            |
+| `DATABASE_URL`                                                       | Yes          | none                                    | `postgresql://` URL                                                                                   |
+| `JWT_ACCESS_SECRET`                                                  | Yes          | none                                    | At least 32 characters                                                                                |
+| `JWT_ISSUER`                                                         | No           | `sparrow-api`                           |                                                                                                       |
+| `JWT_AUDIENCE`                                                       | No           | `sparrow-app`                           |                                                                                                       |
+| `CORS_ORIGINS`                                                       | No           | empty                                   | Comma-separated origins; must be https in production                                                  |
+| `TRUST_PROXY`                                                        | No           | `0`                                     | Proxy hops in front of the API; `1` on Render                                                         |
+| `RATE_LIMIT_WINDOW_MS`                                               | No           | `60000`                                 |                                                                                                       |
+| `RATE_LIMIT_MAX`                                                     | No           | `100`                                   | Requests per window per client IP on `/api`                                                           |
+| `FIREBASE_SERVICE_ACCOUNT_BASE64`                                    | Production   | empty                                   | Base64 of the service account JSON key file; without it, sign-in returns 503                          |
+| `AUTH_ACCESS_TOKEN_TTL_SECONDS`                                      | No           | `900`                                   | 60 to 3600                                                                                            |
+| `AUTH_REFRESH_TOKEN_TTL_DAYS`                                        | No           | `30`                                    | Idle timeout; must not exceed the session max age                                                     |
+| `AUTH_SESSION_MAX_AGE_DAYS`                                          | No           | `90`                                    | Absolute session lifetime, then a new OTP                                                             |
+| `AUTH_FIREBASE_MAX_AUTH_AGE_SECONDS`                                 | No           | `300`                                   | How recent the OTP sign-in must be to exchange it                                                     |
+| `AUTH_REFRESH_REUSE_GRACE_SECONDS`                                   | No           | `30`                                    | 0 to 300; a replay of the previous refresh token this soon after rotation is refused without revoking |
+| `AUTH_EXCHANGE_RATE_LIMIT_WINDOW_MS`, `AUTH_EXCHANGE_RATE_LIMIT_MAX` | No           | `900000`, `30`                          | Per-IP limit on `POST /auth/firebase`                                                                 |
+| `AUTH_REFRESH_RATE_LIMIT_WINDOW_MS`, `AUTH_REFRESH_RATE_LIMIT_MAX`   | No           | `900000`, `30`                          | Per-IP limit shared by refresh and logout                                                             |
+| `TEST_DATABASE_URL`                                                  | Tests only   | `...5433/sparrow_test`                  | Name must end in `_test`                                                                              |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT` | Compose only | `sparrow`, `sparrow`, `sparrow`, `5433` | Local database container                                                                              |
 
 ## Project structure
 
@@ -214,15 +215,17 @@ The exchange accepts a token only when all of the following hold:
 
 New users are created as `customer`. A role is never read from the client.
 
+Firebase failures map to 503, with one exception: when the Admin SDK cannot fetch Google's public signing keys, it reports the failure as an invalid token, so the exchange returns 401. The SDK caches the keys, so this only shows up on a cold start or a key rotation during a Google outage.
+
 ### Endpoints
 
 All three are public and sit under `/api/v1/auth`. Token responses send `Cache-Control: no-store`.
 
-| Method and path       | Body               | Success                                                          | Failure                                                                                                                                      |
-| --------------------- | ------------------ | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /auth/firebase` | `{ idToken }`      | 200 `{ data: { user: { id, phone, role }, isNewUser, tokens } }` | 401 rejected, stale or already exchanged token; 403 `ACCOUNT_SUSPENDED` or `PHONE_NOT_SUPPORTED`; 503 Firebase unavailable or not configured |
-| `POST /auth/refresh`  | `{ refreshToken }` | 200 `{ data: { tokens } }` with a new pair                       | 401 for any invalid, expired, revoked or reused token; 403 `ACCOUNT_SUSPENDED`                                                               |
-| `POST /auth/logout`   | `{ refreshToken }` | 204, whether or not the token was valid                          | 400 for a malformed body only                                                                                                                |
+| Method and path       | Body               | Success                                                          | Failure                                                                                                                                                                             |
+| --------------------- | ------------------ | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /auth/firebase` | `{ idToken }`      | 200 `{ data: { user: { id, phone, role }, isNewUser, tokens } }` | 401 rejected, stale or already exchanged token; 403 `ACCOUNT_SUSPENDED` or `PHONE_NOT_SUPPORTED`; 503 Firebase unavailable or not configured (a failed key fetch is 401, see above) |
+| `POST /auth/refresh`  | `{ refreshToken }` | 200 `{ data: { tokens } }` with a new pair                       | 401 for any invalid, expired, revoked or reused token; 403 `ACCOUNT_SUSPENDED`                                                                                                      |
+| `POST /auth/logout`   | `{ refreshToken }` | 204, whether or not the token was valid                          | 400 for a malformed body only                                                                                                                                                       |
 
 `tokens` is `{ tokenType: "Bearer", accessToken, accessTokenExpiresAt, refreshToken, refreshTokenExpiresAt }`, with ISO 8601 timestamps.
 
@@ -230,8 +233,8 @@ All three are public and sit under `/api/v1/auth`. Token responses send `Cache-C
 
 - **Access token.** An HS256 JWT pinned to `JWT_ISSUER`, `JWT_AUDIENCE` and the `at+jwt` type. It must carry `sub`, `sid` (the session id), `exp` and `iat`, and lives for `AUTH_ACCESS_TOKEN_TTL_SECONDS`.
 - **Refresh token.** `<session id>.<43 base64url characters>`. Only a SHA-256 hash of the random part is stored, in `auth_sessions`.
-- **Rotation.** Every refresh swaps the stored hash in one conditional update and returns a new pair. The old refresh token stops working.
-- **Reuse detection.** Presenting a superseded refresh token revokes the whole session (`refresh_reuse`) and logs a warning with the session and user ids.
+- **Rotation.** Every refresh swaps the stored hash in one conditional update and returns a new pair. The old refresh token stops working; its hash is kept as the session's previous hash.
+- **Reuse detection.** Only the previous refresh token counts as reuse. Presented more than `AUTH_REFRESH_REUSE_GRACE_SECONDS` after the rotation, it revokes the whole session (`refresh_reuse`) and logs a warning carrying the session and user ids as structured fields. Inside the window it is most likely the client's own parallel refresh, so it gets 401 without revoking. Any other secret, including a random one for a valid session id, gets 401 and changes nothing, so knowing a session id is not enough to end a session.
 - **Expiry.** The refresh token expires after `AUTH_REFRESH_TOKEN_TTL_DAYS` without use. The session ends `AUTH_SESSION_MAX_AGE_DAYS` after sign-in, whatever the activity, and the user signs in with a new OTP.
 - **Logout.** Revokes the session that owns the refresh token.
 
@@ -296,7 +299,8 @@ Firebase, not this API, enforces the OTP itself: code expiry, single use, resend
   4. `POST /api/v1/auth/firebase` with the ID token, within five minutes of step 2.
   5. `signOut()` from Firebase. From here on, only Sparrow tokens are used.
 - **Storage.** Keep the refresh token in `expo-secure-store` and the access token in memory. Never use AsyncStorage for either.
-- **Refresh.** On a 401 from an API call, refresh once and retry. Allow only one refresh at a time: two parallel refreshes with the same token look like reuse, and the server revokes the session.
+- **Refresh.** On a 401 from an API call, refresh once and retry. Allow only one refresh at a time: of two parallel refreshes with the same token, one gets the new pair and the other gets 401. Keep the pair that succeeded and drop the 401. Replaying an old refresh token after the grace window revokes the session.
+- **Known limitation: a lost `/refresh` response still requires a new sign-in.** Only a hash of the new refresh token is stored, so the server cannot resend it. If the response never reaches the app, retrying with the old token returns 401 and the user must sign in again with a new OTP.
 - **Logout.** Call `POST /auth/logout` with the refresh token, then clear secure storage.
 - **Error codes to handle.** `PHONE_NOT_SUPPORTED`, `ACCOUNT_SUSPENDED`, `RATE_LIMITED` (honour `Retry-After`) and `SERVICE_UNAVAILABLE`.
 

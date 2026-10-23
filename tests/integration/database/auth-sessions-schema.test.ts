@@ -48,6 +48,7 @@ describe('auth_sessions table', () => {
     expect(session.id).toMatch(UUID);
     expect(session.createdAt).toBeInstanceOf(Date);
     expect(session).toMatchObject({
+      previousRefreshTokenHash: null,
       lastRefreshedAt: null,
       revokedAt: null,
       revokedReason: null,
@@ -94,6 +95,35 @@ describe('auth_sessions table', () => {
       ).rejects.toThrow(/auth_sessions_refresh_token_hash_length_check/);
     },
   );
+
+  it.each([0, 31, 33, 64])(
+    'rejects a previous refresh token hash of %i bytes',
+    async (length) => {
+      const userId = await createUser();
+
+      await expect(
+        prisma.authSession.create({
+          data: {
+            ...sessionData(userId),
+            previousRefreshTokenHash: hash(length),
+          },
+        }),
+      ).rejects.toThrow(
+        /auth_sessions_previous_refresh_token_hash_length_check/,
+      );
+    },
+  );
+
+  it('accepts a 32 byte previous refresh token hash', async () => {
+    const userId = await createUser();
+    const previous = hash();
+
+    const session = await prisma.authSession.create({
+      data: { ...sessionData(userId), previousRefreshTokenHash: previous },
+    });
+
+    expect(session.previousRefreshTokenHash).toEqual(previous);
+  });
 
   it.each([
     ['a revocation time without a reason', { revokedAt: new Date() }],
