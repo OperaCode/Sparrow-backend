@@ -67,6 +67,14 @@ const profileSelect = {
   updatedAt: true,
 } satisfies Prisma.UserSelect;
 
+type SignedInRow = Omit<SignedInUser, 'created'>;
+
+const signedInColumns = Prisma.sql`
+  "id", "phone", "role"::text AS "role", "status"::text AS "status"
+`;
+
+const SIGN_IN_ATTEMPTS = 2;
+
 function isRecordNotFound(error: unknown): boolean {
   return (
     error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -166,28 +174,31 @@ export function createUsersRepository(prisma: PrismaClient): UsersRepository {
     },
 
     /**
-     * Race-safe sign-up or sign-in in one statement. A new user is always a
-     * customer; an existing user keeps their role and status. xmax is 0 only
-     * for a freshly inserted row, which tells the two cases apart without a
-     * second query.
+     * Race-safe sign-up or sign-in. A new user is always a customer; an
+     * existing user keeps their role and status and is not modified. The two
+     * statements deliberately run outside a transaction: under READ COMMITTED
+     * each takes a fresh snapshot, so the SELECT sees a row whose concurrent
+     * insert made ours a no-op. It only finds nothing if that row was rolled
+     * back or deleted in between, which a single retry resolves.
      */
     async upsertCustomerByPhone(phone) {
-      const rows = await prisma.$queryRaw<SignedInUser[]>`
-        INSERT INTO "users" ("phone", "role")
-        VALUES (${phone}, 'customer')
-        ON CONFLICT ("phone") DO UPDATE SET "updated_at" = now()
-        RETURNING
-          "id",
-          "phone",
-          "role"::text AS "role",
-          "status"::text AS "status",
-          (xmax = 0) AS "created"
-      `;
-      const user = rows[0];
-      if (user === undefined) {
-        throw new Error('User upsert returned no row');
+      for (let attempt = 1; attempt <= SIGN_IN_ATTEMPTS; attempt += 1) {
+        const inserted = await prisma.$queryRaw<SignedInRow[]>`
+          INSERT INTO "users" ("phone", "role")
+          VALUES (${phone}, 'customer')
+          ON CONFLICT ("phone") DO NOTHING
+          RETURNING ${signedInColumns}
+        `;
+        if (inserted[0] !== undefined) return { ...inserted[0], created: true };
+
+        const existing = await prisma.$queryRaw<SignedInRow[]>`
+          SELECT ${signedInColumns} FROM "users" WHERE "phone" = ${phone}
+        `;
+        if (existing[0] !== undefined) {
+          return { ...existing[0], created: false };
+        }
       }
-      return user;
+      throw new Error('User sign-in found no row after retry');
     },
 
     findById(id) {
