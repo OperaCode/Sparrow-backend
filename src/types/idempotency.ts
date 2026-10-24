@@ -6,10 +6,10 @@ export interface IdempotencyClaim {
 }
 
 export type IdempotencyRecovery =
-  | { outcome: "fresh" }
-  | { outcome: "replay"; statusCode: number; body: unknown }
-  | { outcome: "mismatch" }
-  | { outcome: "in_progress" };
+  | { outcome: 'fresh' }
+  | { outcome: 'replay'; statusCode: number; body: unknown }
+  | { outcome: 'mismatch' }
+  | { outcome: 'in_progress' };
 
 /**
  * Reads a result that has already committed. It does not insert, replace, or

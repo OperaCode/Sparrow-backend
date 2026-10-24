@@ -60,4 +60,3 @@ export function samplePoint(place: ServiceAreaPlace): Coordinate {
   const point = SAMPLE_POINTS[place];
   return { latitude: point.latitude, longitude: point.longitude };
 }
-

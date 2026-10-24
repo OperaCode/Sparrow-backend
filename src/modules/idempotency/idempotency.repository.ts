@@ -1,10 +1,10 @@
-import type { Prisma } from "../../generated/prisma/client.js";
-import type { PrismaClient } from "../../lib/prisma.js";
+import type { Prisma } from '../../generated/prisma/client.js';
+import type { PrismaClient } from '../../lib/prisma.js';
 import type {
   IdempotencyClaim,
   IdempotencyRecovery,
   IdempotencyStore,
-} from "../../types/idempotency.js";
+} from '../../types/idempotency.js';
 
 type IdempotencyDb = Prisma.TransactionClient | PrismaClient;
 
@@ -29,19 +29,19 @@ export async function readIdempotentResult(
       },
     },
   });
-  if (existing === null) return { outcome: "fresh" };
+  if (existing === null) return { outcome: 'fresh' };
   if (existing.requestHash !== claim.requestHash) {
-    return { outcome: "mismatch" };
+    return { outcome: 'mismatch' };
   }
   if (
-    existing.state !== "completed" ||
+    existing.state !== 'completed' ||
     existing.statusCode === null ||
     existing.responseBody === null
   ) {
-    return { outcome: "in_progress" };
+    return { outcome: 'in_progress' };
   }
   return {
-    outcome: "replay",
+    outcome: 'replay',
     statusCode: existing.statusCode,
     body: existing.responseBody,
   };
@@ -58,7 +58,7 @@ export async function saveIdempotentResult(
   body: unknown,
 ): Promise<void> {
   if (!Number.isInteger(statusCode) || statusCode < 100 || statusCode >= 500) {
-    throw new Error("Only a finished client response can be stored for replay");
+    throw new Error('Only a finished client response can be stored for replay');
   }
   await tx.idempotencyRecord.create({
     data: {
@@ -66,7 +66,7 @@ export async function saveIdempotentResult(
       scope: claim.scope,
       key: claim.key,
       requestHash: claim.requestHash,
-      state: "completed",
+      state: 'completed',
       statusCode,
       responseBody: asJson(body),
       completedAt: new Date(),

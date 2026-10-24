@@ -1,5 +1,6 @@
 dist/
 coverage/
 package-lock.json
+pnpm-lock.yaml
 prisma/migrations/
 src/generated/

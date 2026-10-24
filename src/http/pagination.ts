@@ -1,5 +1,5 @@
-import { z } from "zod";
-import { ValidationError } from "./errors.js";
+import { z } from 'zod';
+import { ValidationError } from './errors.js';
 
 export const PAGE_LIMIT_DEFAULT = 20;
 export const PAGE_LIMIT_MAX = 100;
@@ -44,7 +44,7 @@ const MAX_CURSOR_TEXT_LENGTH = 200;
 
 function invalidCursor(): never {
   throw new ValidationError([
-    { path: "query.cursor", message: "Cursor is invalid" },
+    { path: 'query.cursor', message: 'Cursor is invalid' },
   ]);
 }
 
@@ -55,13 +55,13 @@ export function encodePageCursor(cursor: PageCursor): string {
     createdAt: cursor.createdAt.toISOString(),
     id: cursor.id,
   });
-  return Buffer.from(payload, "utf8").toString("base64url");
+  return Buffer.from(payload, 'utf8').toString('base64url');
 }
 
 export function readPageCursor(token: string): PageCursor {
   let text: string;
   try {
-    text = Buffer.from(token, "base64url").toString("utf8");
+    text = Buffer.from(token, 'base64url').toString('utf8');
   } catch {
     invalidCursor();
   }
@@ -112,7 +112,7 @@ export function slicePage<T extends PageCursor>(
   limit: number,
 ): PageSlice<T> {
   if (!Number.isInteger(limit) || limit < 1) {
-    throw new Error("Page limit must be a positive integer");
+    throw new Error('Page limit must be a positive integer');
   }
   const hasMore = rows.length > limit;
   const items = rows.slice(0, limit);

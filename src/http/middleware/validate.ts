@@ -1,16 +1,16 @@
-import type { RequestHandler } from "express";
-import type { z } from "zod";
-import { ValidationError, type ErrorDetail } from "../errors.js";
+import type { RequestHandler } from 'express';
+import type { z } from 'zod';
+import { ValidationError, type ErrorDetail } from '../errors.js';
 
-type Location = "params" | "query" | "body";
+type Location = 'params' | 'query' | 'body';
 
 export type RequestSchemas = Partial<Record<Location, z.ZodType>>;
 
-const LOCATIONS: readonly Location[] = ["params", "query", "body"];
+const LOCATIONS: readonly Location[] = ['params', 'query', 'body'];
 
 function toDetails(location: Location, error: z.ZodError): ErrorDetail[] {
   return error.issues.map((issue) => ({
-    path: [location, ...issue.path.map(String)].join("."),
+    path: [location, ...issue.path.map(String)].join('.'),
     message: issue.message,
   }));
 }
@@ -47,11 +47,11 @@ export function validate(schemas: RequestSchemas): RequestHandler {
       return;
     }
 
-    if ("params" in parsed) req.params = parsed.params as typeof req.params;
-    if ("body" in parsed) req.body = parsed.body;
-    if ("query" in parsed) {
+    if ('params' in parsed) req.params = parsed.params as typeof req.params;
+    if ('body' in parsed) req.body = parsed.body;
+    if ('query' in parsed) {
       // Express 5 exposes req.query as a getter only, so it cannot be assigned.
-      Object.defineProperty(req, "query", {
+      Object.defineProperty(req, 'query', {
         value: parsed.query,
         enumerable: true,
         configurable: true,

@@ -1,15 +1,17 @@
-import type { Request, RequestHandler } from "express";
-import type { AccountStatus, AuditActor, Role } from "../../types/auth.js";
-import { checkAccountStatus, UnauthorizedError } from "../errors.js";
-import { getRequestId } from "./request-id.js";
+import type { Request, RequestHandler } from 'express';
+import type { AccountStatus, AuditActor, Role } from '../../types/auth.js';
+import { checkAccountStatus, UnauthorizedError } from '../errors.js';
+import { getRequestId } from './request-id.js';
 
 export interface TokenVerifier {
-  verify(token: string): Promise<{ userId: string }>;
+  verify(token: string): Promise<{ userId: string; sessionId: string }>;
 }
 
 export interface AuthSubjectLookup {
-  findAuthSubjectById(
-    id: string,
+  /** Null unless the session is live and belongs to the user. */
+  findAuthSubject(
+    userId: string,
+    sessionId: string,
   ): Promise<{ id: string; role: Role; status: AccountStatus } | null>;
 }
 
@@ -31,17 +33,18 @@ function extractBearerToken(header: string | undefined): string {
 
 /**
  * Verifies the bearer token, then loads role and status from the database on
- * every request. The token only proves identity; it never carries authority,
- * so demotions, suspensions, and deactivations take effect immediately.
+ * every request, through the token's session. The token only proves identity;
+ * it never carries authority, so demotions, suspensions, deactivations, and
+ * logouts take effect immediately.
  */
 export function createAuthenticate(
   deps: AuthenticateDependencies,
 ): RequestHandler {
   return async (req, _res, next) => {
-    const token = extractBearerToken(req.get("Authorization"));
-    const { userId } = await deps.verifier.verify(token);
+    const token = extractBearerToken(req.get('Authorization'));
+    const { userId, sessionId } = await deps.verifier.verify(token);
 
-    const subject = await deps.subjects.findAuthSubjectById(userId);
+    const subject = await deps.subjects.findAuthSubject(userId, sessionId);
     if (subject === null) {
       throw new UnauthorizedError();
     }

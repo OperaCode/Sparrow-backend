@@ -1,18 +1,18 @@
-import { Prisma } from "../../generated/prisma/client.js";
-import type { PrismaClient } from "../../lib/prisma.js";
-import type { AuditActor } from "../../types/auth.js";
-import type { IdempotencyClaim } from "../../types/idempotency.js";
-import { createAuditRepository } from "../audit/audit.repository.js";
+import { Prisma } from '../../generated/prisma/client.js';
+import type { PrismaClient } from '../../lib/prisma.js';
+import type { AuditActor } from '../../types/auth.js';
+import type { IdempotencyClaim } from '../../types/idempotency.js';
+import { createAuditRepository } from '../audit/audit.repository.js';
 import {
   readIdempotentResult,
   saveIdempotentResult,
-} from "../idempotency/idempotency.repository.js";
-import { assertServiceAreaMap, isServiceAreaPlace } from "./pricing.locate.js";
+} from '../idempotency/idempotency.repository.js';
+import { assertServiceAreaMap, isServiceAreaPlace } from './pricing.locate.js';
 import {
   PricingConfigurationError,
   amountDue,
   assertPositiveKobo,
-} from "./pricing.money.js";
+} from './pricing.money.js';
 import type {
   AreaBox,
   Coordinate,
@@ -30,9 +30,9 @@ import type {
   ServiceAreaPlace,
   SpecialPickupTier,
   ZoneTier,
-} from "./pricing.types.js";
+} from './pricing.types.js';
 
-type ServiceType = QuoteRequest["service"];
+type ServiceType = QuoteRequest['service'];
 
 interface SnapshotRow {
   id: string;
@@ -52,9 +52,9 @@ interface SnapshotRow {
 }
 
 export type ManualQuoteWriteResult =
-  PricedOrder | "missing" | "not_pending" | { belowMinimum: number };
+  PricedOrder | 'missing' | 'not_pending' | { belowMinimum: number };
 
-export type AreaWriteResult = ServiceArea | "missing" | "invalid";
+export type AreaWriteResult = ServiceArea | 'missing' | 'invalid';
 
 export interface CreatePricedOrderArgs {
   customerId: string;
@@ -67,10 +67,10 @@ export interface CreatePricedOrderArgs {
 }
 
 export type CreatePricedOrderResult =
-  | { outcome: "created"; order: PricedOrder }
-  | { outcome: "replay"; statusCode: number; body: unknown }
-  | { outcome: "mismatch" }
-  | { outcome: "in_progress" };
+  | { outcome: 'created'; order: PricedOrder }
+  | { outcome: 'replay'; statusCode: number; body: unknown }
+  | { outcome: 'mismatch' }
+  | { outcome: 'in_progress' };
 
 export interface PricingRepository {
   listRules(): Promise<PriceRuleRecord[]>;
@@ -100,14 +100,14 @@ export interface PricingRepository {
 function isUniqueViolation(error: unknown): boolean {
   return (
     error instanceof Prisma.PrismaClientKnownRequestError &&
-    error.code === "P2002"
+    error.code === 'P2002'
   );
 }
 
 function toRule(row: {
-  component: PriceRuleRecord["component"];
+  component: PriceRuleRecord['component'];
   tier: string;
-  quoteMode: PriceRuleRecord["quoteMode"];
+  quoteMode: PriceRuleRecord['quoteMode'];
   amountKobo: number | null;
   minimumKobo: number | null;
 }): PriceRuleRecord {
@@ -141,25 +141,25 @@ function toPricedOrder(row: SnapshotRow): PricedOrder {
   const components: PriceComponentQuote[] = [];
   if (row.errandTier !== null) {
     components.push({
-      component: "errand",
+      component: 'errand',
       tier: row.errandTier,
-      quoteMode: row.errandAmountKobo === null ? "manual" : "automatic",
+      quoteMode: row.errandAmountKobo === null ? 'manual' : 'automatic',
       amountKobo: row.errandAmountKobo,
     });
   }
   if (row.zoneTier !== null) {
     components.push({
-      component: "standard_zone",
+      component: 'standard_zone',
       tier: row.zoneTier,
-      quoteMode: row.zoneAmountKobo === null ? "manual" : "automatic",
+      quoteMode: row.zoneAmountKobo === null ? 'manual' : 'automatic',
       amountKobo: row.zoneAmountKobo,
     });
   }
   if (row.specialPickupTier !== null) {
     components.push({
-      component: "special_pickup",
+      component: 'special_pickup',
       tier: row.specialPickupTier,
-      quoteMode: row.specialPickupAmountKobo === null ? "manual" : "automatic",
+      quoteMode: row.specialPickupAmountKobo === null ? 'manual' : 'automatic',
       amountKobo: row.specialPickupAmountKobo,
     });
   }
@@ -170,7 +170,7 @@ function toPricedOrder(row: SnapshotRow): PricedOrder {
     id: row.id,
     serviceType: row.serviceType,
     pricingStatus: row.pricingStatus,
-    currency: "NGN",
+    currency: 'NGN',
     components,
     totalKobo: row.totalKobo,
     minimumTotalKobo: row.minimumTotalKobo,
@@ -189,24 +189,24 @@ function assertStoredTotal(
   row: SnapshotRow,
   components: readonly PriceComponentQuote[],
 ): void {
-  if (row.pricingStatus === "manual_quoted") {
-    const total = assertPositiveKobo(row.totalKobo, "stored total");
-    const floor = assertPositiveKobo(row.minimumTotalKobo, "snapshotted floor");
+  if (row.pricingStatus === 'manual_quoted') {
+    const total = assertPositiveKobo(row.totalKobo, 'stored total');
+    const floor = assertPositiveKobo(row.minimumTotalKobo, 'snapshotted floor');
     if (total < floor) {
       throw new PricingConfigurationError(
-        "Stored total is below the snapshotted floor",
+        'Stored total is below the snapshotted floor',
       );
     }
     return;
   }
-  if (row.pricingStatus === "pending_manual_quote") {
-    assertPositiveKobo(row.minimumTotalKobo, "snapshotted floor");
+  if (row.pricingStatus === 'pending_manual_quote') {
+    assertPositiveKobo(row.minimumTotalKobo, 'snapshotted floor');
   } else if (row.minimumTotalKobo !== null) {
-    throw new PricingConfigurationError("Automatic order has a manual floor");
+    throw new PricingConfigurationError('Automatic order has a manual floor');
   }
   if (row.totalKobo !== amountDue(components)) {
     throw new PricingConfigurationError(
-      "Stored total does not match the snapshotted components",
+      'Stored total does not match the snapshotted components',
     );
   }
 }
@@ -230,10 +230,10 @@ interface ManualQuoteRow {
 
 function wholeKobo(value: number | string | bigint | null): number | null {
   if (value === null) return null;
-  const amount = typeof value === "number" ? value : Number(value);
+  const amount = typeof value === 'number' ? value : Number(value);
   if (!Number.isSafeInteger(amount)) {
     throw new PricingConfigurationError(
-      "Stored amount was not a whole number of kobo",
+      'Stored amount was not a whole number of kobo',
     );
   }
   return amount;
@@ -247,13 +247,13 @@ function orderFromManualQuote(
   const totalKobo = wholeKobo(row.totalKobo);
   if (totalKobo !== amountKobo) {
     throw new PricingConfigurationError(
-      "Manual quote was not stored as entered",
+      'Manual quote was not stored as entered',
     );
   }
   return toPricedOrder({
     id: row.id,
     serviceType: row.serviceType as ServiceType,
-    pricingStatus: "manual_quoted",
+    pricingStatus: 'manual_quoted',
     errandTier: row.errandTier as ErrandTier | null,
     errandAmountKobo: wholeKobo(row.errandAmountKobo),
     zoneTier: row.zoneTier as ZoneTier | null,
@@ -282,22 +282,22 @@ function orderCreateData(
   quote: PriceQuote,
 ): Prisma.OrderCreateInput {
   const pickup = coordinateOrNull(
-    "pickup" in request ? request.pickup : undefined,
+    'pickup' in request ? request.pickup : undefined,
   );
   const destination = coordinateOrNull(
-    "destination" in request ? request.destination : undefined,
+    'destination' in request ? request.destination : undefined,
   );
   const collection = coordinateOrNull(
-    request.service === "special_pickup" ? request.collection : undefined,
+    request.service === 'special_pickup' ? request.collection : undefined,
   );
   const zone = quote.components.find(
-    (component) => component.component === "standard_zone",
+    (component) => component.component === 'standard_zone',
   );
   const specialPickup = quote.components.find(
-    (component) => component.component === "special_pickup",
+    (component) => component.component === 'special_pickup',
   );
   const errand = quote.components.find(
-    (component) => component.component === "errand",
+    (component) => component.component === 'errand',
   );
 
   return {
@@ -312,7 +312,7 @@ function orderCreateData(
     destinationLongitude: destination.longitude,
     collectionLatitude: collection.latitude,
     collectionLongitude: collection.longitude,
-    errandTier: request.service === "errand" ? request.errandTier : null,
+    errandTier: request.service === 'errand' ? request.errandTier : null,
     pricingStatus: quote.pricingStatus,
     zoneTier: zone?.tier ?? null,
     zoneAmountKobo: zone?.amountKobo ?? null,
@@ -371,8 +371,8 @@ export function createPricingRepository(
         await audit.record(tx, {
           actorId: actor.actorId,
           requestId: actor.requestId,
-          action: "pricing.rule.update",
-          targetType: "price_rule",
+          action: 'pricing.rule.update',
+          targetType: 'price_rule',
           targetId: `${component}:${tier}`,
           metadata: {
             fromQuoteMode: existing.quoteMode,
@@ -419,14 +419,14 @@ export function createPricingRepository(
           const area = toArea(row);
           return area === null ? [] : [area];
         });
-        if (!areas.some((area) => area.place === place)) return "missing";
+        if (!areas.some((area) => area.place === place)) return 'missing';
         const next = areas.map((area) =>
           area.place === place ? { place, ...box } : area,
         );
         try {
           assertServiceAreaMap(next);
         } catch (error) {
-          if (error instanceof PricingConfigurationError) return "invalid";
+          if (error instanceof PricingConfigurationError) return 'invalid';
           throw error;
         }
         const previous = areas.find((area) => area.place === place);
@@ -437,14 +437,14 @@ export function createPricingRepository(
         const updated = toArea(row);
         if (updated === null || previous === undefined) {
           throw new PricingConfigurationError(
-            "Updated area is not on the service map",
+            'Updated area is not on the service map',
           );
         }
         await audit.record(tx, {
           actorId: actor.actorId,
           requestId: actor.requestId,
-          action: "pricing.area.update",
-          targetType: "service_area",
+          action: 'pricing.area.update',
+          targetType: 'service_area',
           targetId: place,
           metadata: {
             fromMinLatitude: previous.minLatitude,
@@ -477,17 +477,17 @@ export function createPricingRepository(
             return mapped === null ? [] : [mapped];
           });
           const quote = quoteFromRules(rules, areas);
-          if (quote.pricingStatus === "pending_manual_quote") {
-            assertPositiveKobo(quote.minimumTotalKobo, "quote floor");
+          if (quote.pricingStatus === 'pending_manual_quote') {
+            assertPositiveKobo(quote.minimumTotalKobo, 'quote floor');
           } else if (quote.minimumTotalKobo !== null) {
             throw new PricingConfigurationError(
-              "Automatic quote includes a manual floor",
+              'Automatic quote includes a manual floor',
             );
           }
           const due = amountDue(quote.components);
           if (quote.totalKobo !== due) {
             throw new PricingConfigurationError(
-              "Refusing to store a quote whose total does not match its components",
+              'Refusing to store a quote whose total does not match its components',
             );
           }
           const row = await tx.order.create({
@@ -497,11 +497,11 @@ export function createPricingRepository(
           await saveIdempotentResult(tx, claim, 201, { data: created });
           return created;
         });
-        return { outcome: "created" as const, order };
+        return { outcome: 'created' as const, order };
       } catch (error) {
         if (!isUniqueViolation(error)) throw error;
         const saved = await readIdempotentResult(prisma, claim);
-        if (saved.outcome === "fresh") throw error;
+        if (saved.outcome === 'fresh') throw error;
         return saved;
       }
     },
@@ -514,7 +514,7 @@ export function createPricingRepository(
      * was saved.
      */
     async applyManualQuote(id, amountKobo, actor) {
-      assertPositiveKobo(amountKobo, "manual quote");
+      assertPositiveKobo(amountKobo, 'manual quote');
       return prisma.$transaction(async (tx) => {
         const rows = await tx.$queryRaw<ManualQuoteRow[]>`
           UPDATE "orders"
@@ -549,8 +549,8 @@ export function createPricingRepository(
           await audit.record(tx, {
             actorId: actor.actorId,
             requestId: actor.requestId,
-            action: "order.manual_quote",
-            targetType: "order",
+            action: 'order.manual_quote',
+            targetType: 'order',
             targetId: id,
             metadata: { amountKobo },
           });
@@ -565,23 +565,23 @@ export function createPricingRepository(
             minimumTotalKobo: true,
           },
         });
-        if (existing === null) return "missing";
+        if (existing === null) return 'missing';
         if (
-          existing.pricingStatus === "pending_manual_quote" &&
+          existing.pricingStatus === 'pending_manual_quote' &&
           existing.minimumTotalKobo !== null &&
           amountKobo < existing.minimumTotalKobo
         ) {
           return { belowMinimum: existing.minimumTotalKobo };
         }
         if (
-          existing.pricingStatus === "pending_manual_quote" &&
+          existing.pricingStatus === 'pending_manual_quote' &&
           existing.minimumTotalKobo === null
         ) {
           throw new PricingConfigurationError(
-            "Pending quote is missing its floor",
+            'Pending quote is missing its floor',
           );
         }
-        return "not_pending";
+        return 'not_pending';
       });
     },
   };

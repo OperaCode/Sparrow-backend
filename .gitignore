@@ -4,5 +4,7 @@ coverage/
 .env
 .env.*
 !.env.example
+*service-account*.json
+firebase-adminsdk-*.json
 src/generated/
 .cursor/*

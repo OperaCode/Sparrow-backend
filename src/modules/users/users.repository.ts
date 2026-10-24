@@ -1,17 +1,17 @@
-import { Prisma } from "../../generated/prisma/client.js";
-import type { PrismaClient } from "../../lib/prisma.js";
-import type { AccountStatus, AuditActor, Role } from "../../types/auth.js";
+import { Prisma } from '../../generated/prisma/client.js';
+import type { PrismaClient } from '../../lib/prisma.js';
+import type { AccountStatus, AuditActor, Role } from '../../types/auth.js';
 import {
   createAuditRepository,
   type AuditMetadata,
   type AuditRepository,
-} from "../audit/audit.repository.js";
+} from '../audit/audit.repository.js';
 import type {
   NewAccount,
   ProfilePatch,
   ProvisionRole,
   UserProfile,
-} from "./users.types.js";
+} from './users.types.js';
 
 export interface AuthSubject {
   id: string;
@@ -19,15 +19,24 @@ export interface AuthSubject {
   status: AccountStatus;
 }
 
+export interface SignedInUser extends AuthSubject {
+  phone: string;
+  created: boolean;
+}
+
 export interface UsersRepository {
-  findAuthSubjectById(id: string): Promise<AuthSubject | null>;
+  findAuthSubject(
+    userId: string,
+    sessionId: string,
+  ): Promise<AuthSubject | null>;
+  upsertCustomerByPhone(phone: string): Promise<SignedInUser>;
   findById(id: string): Promise<UserProfile | null>;
   findByPhone(phone: string): Promise<UserProfile | null>;
-  insertCustomer(phone: string): Promise<UserProfile | "conflict">;
+  insertCustomer(phone: string): Promise<UserProfile | 'conflict'>;
   insertProvisioned(
     account: NewAccount,
     actor: AuditActor,
-  ): Promise<UserProfile | "conflict">;
+  ): Promise<UserProfile | 'conflict'>;
   updateProfile(id: string, patch: ProfilePatch): Promise<UserProfile | null>;
   /** Own-account status. Not an admin action, so it is not audited. */
   updateOwnStatus(
@@ -58,17 +67,25 @@ const profileSelect = {
   updatedAt: true,
 } satisfies Prisma.UserSelect;
 
+type SignedInRow = Omit<SignedInUser, 'created'>;
+
+const signedInColumns = Prisma.sql`
+  "id", "phone", "role"::text AS "role", "status"::text AS "status"
+`;
+
+const SIGN_IN_ATTEMPTS = 2;
+
 function isRecordNotFound(error: unknown): boolean {
   return (
     error instanceof Prisma.PrismaClientKnownRequestError &&
-    error.code === "P2025"
+    error.code === 'P2025'
   );
 }
 
 function isUniqueViolation(error: unknown): boolean {
   return (
     error instanceof Prisma.PrismaClientKnownRequestError &&
-    error.code === "P2002"
+    error.code === 'P2002'
   );
 }
 
@@ -76,11 +93,11 @@ export function createUsersRepository(prisma: PrismaClient): UsersRepository {
   const audit: AuditRepository = createAuditRepository();
   async function insert(
     data: Prisma.UserCreateInput,
-  ): Promise<UserProfile | "conflict"> {
+  ): Promise<UserProfile | 'conflict'> {
     try {
       return await prisma.user.create({ data, select: profileSelect });
     } catch (error) {
-      if (isUniqueViolation(error)) return "conflict";
+      if (isUniqueViolation(error)) return 'conflict';
       throw error;
     }
   }
@@ -105,7 +122,7 @@ export function createUsersRepository(prisma: PrismaClient): UsersRepository {
     id: string,
     data: Prisma.UserUpdateInput,
     actor: AuditActor,
-    action: "user.status.update" | "user.role.update",
+    action: 'user.status.update' | 'user.role.update',
     changes: (before: UserProfile, after: UserProfile) => AuditMetadata,
   ): Promise<UserProfile | null> {
     try {
@@ -124,7 +141,7 @@ export function createUsersRepository(prisma: PrismaClient): UsersRepository {
           actorId: actor.actorId,
           requestId: actor.requestId,
           action,
-          targetType: "user",
+          targetType: 'user',
           targetId: after.id,
           metadata: changes(before, after),
         });
@@ -137,11 +154,51 @@ export function createUsersRepository(prisma: PrismaClient): UsersRepository {
   }
 
   return {
-    findAuthSubjectById(id) {
-      return prisma.user.findUnique({
-        where: { id },
-        select: { id: true, role: true, status: true },
-      });
+    /**
+     * One primary-key lookup on the session, joined to its user. A revoked or
+     * fully expired session makes every access token issued for it invalid.
+     * The idle refresh expiry is deliberately not checked: it governs refresh,
+     * and access tokens are short-lived.
+     */
+    async findAuthSubject(userId, sessionId) {
+      const rows = await prisma.$queryRaw<AuthSubject[]>`
+        SELECT u."id", u."role"::text AS "role", u."status"::text AS "status"
+        FROM "auth_sessions" s
+        JOIN "users" u ON u."id" = s."user_id"
+        WHERE s."id" = CAST(${sessionId} AS uuid)
+          AND s."user_id" = CAST(${userId} AS uuid)
+          AND s."revoked_at" IS NULL
+          AND s."absolute_expires_at" > now()
+      `;
+      return rows[0] ?? null;
+    },
+
+    /**
+     * Race-safe sign-up or sign-in. A new user is always a customer; an
+     * existing user keeps their role and status and is not modified. The two
+     * statements deliberately run outside a transaction: under READ COMMITTED
+     * each takes a fresh snapshot, so the SELECT sees a row whose concurrent
+     * insert made ours a no-op. It only finds nothing if that row was rolled
+     * back or deleted in between, which a single retry resolves.
+     */
+    async upsertCustomerByPhone(phone) {
+      for (let attempt = 1; attempt <= SIGN_IN_ATTEMPTS; attempt += 1) {
+        const inserted = await prisma.$queryRaw<SignedInRow[]>`
+          INSERT INTO "users" ("phone", "role")
+          VALUES (${phone}, 'customer')
+          ON CONFLICT ("phone") DO NOTHING
+          RETURNING ${signedInColumns}
+        `;
+        if (inserted[0] !== undefined) return { ...inserted[0], created: true };
+
+        const existing = await prisma.$queryRaw<SignedInRow[]>`
+          SELECT ${signedInColumns} FROM "users" WHERE "phone" = ${phone}
+        `;
+        if (existing[0] !== undefined) {
+          return { ...existing[0], created: false };
+        }
+      }
+      throw new Error('User sign-in found no row after retry');
     },
 
     findById(id) {
@@ -175,15 +232,15 @@ export function createUsersRepository(prisma: PrismaClient): UsersRepository {
           await audit.record(tx, {
             actorId: actor.actorId,
             requestId: actor.requestId,
-            action: "user.provision",
-            targetType: "user",
+            action: 'user.provision',
+            targetType: 'user',
             targetId: row.id,
             metadata: { role: row.role, accountType: row.accountType },
           });
           return row;
         });
       } catch (error) {
-        if (isUniqueViolation(error)) return "conflict";
+        if (isUniqueViolation(error)) return 'conflict';
         throw error;
       }
     },
@@ -205,7 +262,7 @@ export function createUsersRepository(prisma: PrismaClient): UsersRepository {
         id,
         { status },
         actor,
-        "user.status.update",
+        'user.status.update',
         (before, after) => ({
           from: before.status,
           to: after.status,
@@ -218,7 +275,7 @@ export function createUsersRepository(prisma: PrismaClient): UsersRepository {
         id,
         { role },
         actor,
-        "user.role.update",
+        'user.role.update',
         (before, after) => ({
           from: before.role,
           to: after.role,

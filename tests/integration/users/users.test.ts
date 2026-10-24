@@ -5,7 +5,8 @@ import { createPricingModules } from '#src/modules/pricing/pricing.module.js';
 import { createUsersModules } from '#src/modules/users/users.module.js';
 import { createUsersRepository } from '#src/modules/users/users.repository.js';
 import { createUsersService } from '#src/modules/users/users.service.js';
-import { buildTestApp, testConfig, tokenFor } from '../../helpers/app.js';
+import { accessTokenFor } from '../../helpers/account.js';
+import { buildTestApp, testConfig } from '../../helpers/app.js';
 import { createTestPrisma, truncateAllTables } from '../../helpers/database.js';
 import { errorOf } from '../../helpers/http.js';
 import { createAccountFactory } from '../../helpers/user.factory.js';
@@ -69,7 +70,7 @@ describe('verified customers', () => {
     });
     expect(await prisma.user.count()).toBe(1);
 
-    const token = await tokenFor(created.id, config);
+    const token = await accessTokenFor(prisma, created.id, config);
     const response = await request(app)
       .get('/api/v1/me')
       .query({ userId: '00000000-0000-4000-8000-000000000000' })
@@ -144,7 +145,7 @@ describe('verified customers', () => {
 describe('profile restoration', () => {
   it('saves name, community, and account type for the token user', async () => {
     const created = await service.openVerifiedCustomer(accounts.phone());
-    const token = await tokenFor(created.id, config);
+    const token = await accessTokenFor(prisma, created.id, config);
 
     const updated = await request(app)
       .patch('/api/v1/me')
@@ -185,7 +186,7 @@ describe('profile restoration', () => {
   it('rejects a client role and leaves the stored profile unchanged', async () => {
     const phone = accounts.phone();
     const created = await service.openVerifiedCustomer(phone);
-    const token = await tokenFor(created.id, config);
+    const token = await accessTokenFor(prisma, created.id, config);
 
     const response = await request(app)
       .patch('/api/v1/me')
@@ -303,7 +304,7 @@ describe('operations permissions', () => {
     });
     expect(body).not.toHaveProperty('token');
 
-    const token = await tokenFor(body.id, config);
+    const token = await accessTokenFor(prisma, body.id, config);
     await request(app)
       .post('/api/v1/users')
       .set('Authorization', `Bearer ${token}`)

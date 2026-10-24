@@ -5,28 +5,28 @@ import {
   NotFoundError,
   UnauthorizedError,
   ValidationError,
-} from "../../http/errors.js";
-import type { Logger } from "../../lib/logger.js";
+} from '../../http/errors.js';
+import type { Logger } from '../../lib/logger.js';
 import {
   ACCOUNT_STATUSES,
   type AccountStatus,
   type AuditActor,
-} from "../../types/auth.js";
-import type { UsersRepository } from "./users.repository.js";
+} from '../../types/auth.js';
+import type { UsersRepository } from './users.repository.js';
 import type {
   NewAccount,
   ProfilePatch,
   ProvisionInput,
   ProvisionRole,
   UserProfile,
-} from "./users.types.js";
+} from './users.types.js';
 import {
   ACCOUNT_TYPES,
   COMMUNITIES,
   NAME_MAX_LENGTH,
   PHONE_PATTERN,
   PROVISION_ROLES,
-} from "./users.types.js";
+} from './users.types.js';
 
 export interface UsersService {
   /**
@@ -78,14 +78,14 @@ function oneOf<T extends string>(
 
 function parsePhone(phone: string): string {
   if (!PHONE_PATTERN.test(phone))
-    invalid("phone", "Phone must be in E.164 form");
+    invalid('phone', 'Phone must be in E.164 form');
   return phone;
 }
 
 function parseName(name: string): string {
   const trimmed = name.trim();
   if (trimmed.length === 0 || trimmed.length > NAME_MAX_LENGTH) {
-    invalid("name", "Name must be 1 to 80 characters");
+    invalid('name', 'Name must be 1 to 80 characters');
   }
   return trimmed;
 }
@@ -97,16 +97,16 @@ function parsePatch(patch: ProfilePatch): ProfilePatch {
     next.community = oneOf(
       patch.community,
       COMMUNITIES,
-      "community",
-      "Community must be igbesa, lusada, or ketu",
+      'community',
+      'Community must be igbesa, lusada, or ketu',
     );
   }
   if (patch.accountType !== undefined) {
     next.accountType = oneOf(
       patch.accountType,
       ACCOUNT_TYPES,
-      "accountType",
-      "Account type must be standard or business",
+      'accountType',
+      'Account type must be standard or business',
     );
   }
   if (
@@ -114,7 +114,7 @@ function parsePatch(patch: ProfilePatch): ProfilePatch {
     next.community === undefined &&
     next.accountType === undefined
   ) {
-    invalid("body", "At least one profile field is required");
+    invalid('body', 'At least one profile field is required');
   }
   return next;
 }
@@ -144,7 +144,7 @@ export function createUsersService(options: UsersServiceOptions): UsersService {
       await repository.findById(actorId),
       new ForbiddenError(),
     );
-    if (actor.role !== "admin") throw new ForbiddenError();
+    if (actor.role !== 'admin') throw new ForbiddenError();
   }
 
   async function requireOtherAccount(
@@ -161,7 +161,7 @@ export function createUsersService(options: UsersServiceOptions): UsersService {
   async function loadVerifiedWinner(phone: string): Promise<UserProfile> {
     return ready(
       await repository.findByPhone(phone),
-      new Error("Verified customer insert conflicted but no row exists"),
+      new Error('Verified customer insert conflicted but no row exists'),
     );
   }
 
@@ -172,9 +172,9 @@ export function createUsersService(options: UsersServiceOptions): UsersService {
       if (existing !== null) return ready(existing, new UnauthorizedError());
 
       const created = await repository.insertCustomer(verifiedPhone);
-      if (created === "conflict") return loadVerifiedWinner(verifiedPhone);
+      if (created === 'conflict') return loadVerifiedWinner(verifiedPhone);
 
-      logger.info({ userId: created.id }, "Opened customer profile");
+      logger.info({ userId: created.id }, 'Opened customer profile');
       return created;
     },
 
@@ -193,17 +193,17 @@ export function createUsersService(options: UsersServiceOptions): UsersService {
 
     async deactivateOwnAccount(userId) {
       const profile = await loadActive(userId);
-      if (profile.role === "admin") {
+      if (profile.role === 'admin') {
         throw new ForbiddenError(
-          "An admin account can only be deactivated by another admin",
+          'An admin account can only be deactivated by another admin',
         );
       }
 
       const updated = found(
-        await repository.updateOwnStatus(profile.id, "deactivated"),
+        await repository.updateOwnStatus(profile.id, 'deactivated'),
         new UnauthorizedError(),
       );
-      logger.info({ userId: profile.id }, "Deactivated own account");
+      logger.info({ userId: profile.id }, 'Deactivated own account');
       return updated;
     },
 
@@ -214,8 +214,8 @@ export function createUsersService(options: UsersServiceOptions): UsersService {
         role: oneOf(
           input.role,
           PROVISION_ROLES,
-          "role",
-          "Role must be customer or admin",
+          'role',
+          'Role must be customer or admin',
         ),
         name: input.name === undefined ? null : parseName(input.name),
         community:
@@ -224,67 +224,67 @@ export function createUsersService(options: UsersServiceOptions): UsersService {
             : oneOf(
                 input.community,
                 COMMUNITIES,
-                "community",
-                "Community must be igbesa, lusada, or ketu",
+                'community',
+                'Community must be igbesa, lusada, or ketu',
               ),
         accountType:
           input.accountType === undefined
-            ? "standard"
+            ? 'standard'
             : oneOf(
                 input.accountType,
                 ACCOUNT_TYPES,
-                "accountType",
-                "Account type must be standard or business",
+                'accountType',
+                'Account type must be standard or business',
               ),
       };
 
       const created = await repository.insertProvisioned(account, actor);
-      if (created === "conflict") {
-        throw new ConflictError("An account with this phone already exists");
+      if (created === 'conflict') {
+        throw new ConflictError('An account with this phone already exists');
       }
       logger.info(
         { actorId: actor.actorId, userId: created.id, role: created.role },
-        "Provisioned account",
+        'Provisioned account',
       );
       return created;
     },
 
     async setAccountStatus(actor, targetId, status) {
-      await requireOtherAccount(actor.actorId, targetId, "account status");
+      await requireOtherAccount(actor.actorId, targetId, 'account status');
       const nextStatus = oneOf(
         status,
         ACCOUNT_STATUSES,
-        "status",
-        "Status must be active, suspended, or deactivated",
+        'status',
+        'Status must be active, suspended, or deactivated',
       );
 
       const updated = found(
         await repository.updateStatus(targetId, nextStatus, actor),
-        new NotFoundError("Account not found"),
+        new NotFoundError('Account not found'),
       );
       logger.info(
         { actorId: actor.actorId, userId: targetId, status: nextStatus },
-        "Updated account status",
+        'Updated account status',
       );
       return updated;
     },
 
     async setAccountRole(actor, targetId, role) {
-      await requireOtherAccount(actor.actorId, targetId, "role");
+      await requireOtherAccount(actor.actorId, targetId, 'role');
       const nextRole = oneOf(
         role,
         PROVISION_ROLES,
-        "role",
-        "Role must be customer or admin",
+        'role',
+        'Role must be customer or admin',
       );
 
       const updated = found(
         await repository.updateRole(targetId, nextRole, actor),
-        new NotFoundError("Account not found"),
+        new NotFoundError('Account not found'),
       );
       logger.info(
         { actorId: actor.actorId, userId: targetId, role: nextRole },
-        "Updated account role",
+        'Updated account role',
       );
       return updated;
     },

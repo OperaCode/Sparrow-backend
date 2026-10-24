@@ -1,30 +1,30 @@
-import { describe, expect, it } from "vitest";
-import { createLogger } from "#src/lib/logger.js";
-import type { AuditActor } from "#src/types/auth.js";
-import type { IdempotencyClaim } from "#src/types/idempotency.js";
+import { describe, expect, it } from 'vitest';
+import { createLogger } from '#src/lib/logger.js';
+import type { AuditActor } from '#src/types/auth.js';
+import type { IdempotencyClaim } from '#src/types/idempotency.js';
 import {
   APPROVED_SERVICE_AREAS,
   samplePoint,
-} from "#src/modules/pricing/pricing.areas.js";
-import { APPROVED_PRICE_RULES } from "#src/modules/pricing/pricing.catalog.js";
-import { assertServiceAreaMap } from "#src/modules/pricing/pricing.locate.js";
-import { PricingConfigurationError } from "#src/modules/pricing/pricing.money.js";
+} from '#src/modules/pricing/pricing.areas.js';
+import { APPROVED_PRICE_RULES } from '#src/modules/pricing/pricing.catalog.js';
+import { assertServiceAreaMap } from '#src/modules/pricing/pricing.locate.js';
+import { PricingConfigurationError } from '#src/modules/pricing/pricing.money.js';
 import type {
   CreatePricedOrderArgs,
   ManualQuoteWriteResult,
   PricingRepository,
-} from "#src/modules/pricing/pricing.repository.js";
+} from '#src/modules/pricing/pricing.repository.js';
 import {
   createPricingService,
   type PricingService,
-} from "#src/modules/pricing/pricing.service.js";
+} from '#src/modules/pricing/pricing.service.js';
 import type {
   PriceRuleRecord,
   PricedOrder,
   QuoteRequest,
   RuleUpdate,
   ServiceArea,
-} from "#src/modules/pricing/pricing.types.js";
+} from '#src/modules/pricing/pricing.types.js';
 
 interface Memory {
   repository: PricingRepository;
@@ -62,7 +62,7 @@ function memoryRepository(
 
     updateArea(place, box) {
       const index = areas.findIndex((area) => area.place === place);
-      if (index < 0) return Promise.resolve("missing");
+      if (index < 0) return Promise.resolve('missing');
       const next = areas.map((area, areaIndex) =>
         areaIndex === index ? { place, ...box } : { ...area },
       );
@@ -70,12 +70,12 @@ function memoryRepository(
         assertServiceAreaMap(next);
       } catch (error) {
         if (error instanceof PricingConfigurationError) {
-          return Promise.resolve("invalid");
+          return Promise.resolve('invalid');
         }
         throw error;
       }
       const updated = next[index];
-      if (updated === undefined) return Promise.resolve("missing");
+      if (updated === undefined) return Promise.resolve('missing');
       areas[index] = updated;
       return Promise.resolve({ ...updated });
     },
@@ -89,10 +89,10 @@ function memoryRepository(
       const previous = saved.get(id);
       if (previous !== undefined) {
         if (previous.hash !== claim.requestHash) {
-          return Promise.resolve({ outcome: "mismatch" });
+          return Promise.resolve({ outcome: 'mismatch' });
         }
         return Promise.resolve({
-          outcome: "replay",
+          outcome: 'replay',
           statusCode: 201,
           body: { data: previous.order },
         });
@@ -105,7 +105,7 @@ function memoryRepository(
         id: `order-${orders.length + 1}`,
         serviceType: request.service,
         pricingStatus: quote.pricingStatus,
-        currency: "NGN",
+        currency: 'NGN',
         components: quote.components.map((component) => ({ ...component })),
         totalKobo: quote.totalKobo,
         minimumTotalKobo: quote.minimumTotalKobo,
@@ -119,7 +119,7 @@ function memoryRepository(
         components: order.components.map((component) => ({ ...component })),
       };
       saved.set(id, { hash: claim.requestHash, order: copy });
-      return Promise.resolve({ outcome: "created", order: copy });
+      return Promise.resolve({ outcome: 'created', order: copy });
     },
 
     findOrder(id) {
@@ -133,9 +133,9 @@ function memoryRepository(
 
     applyManualQuote(id, amountKobo): Promise<ManualQuoteWriteResult> {
       const order = orders.find((item) => item.id === id);
-      if (order === undefined) return Promise.resolve("missing");
-      if (order.pricingStatus !== "pending_manual_quote") {
-        return Promise.resolve("not_pending");
+      if (order === undefined) return Promise.resolve('missing');
+      if (order.pricingStatus !== 'pending_manual_quote') {
+        return Promise.resolve('not_pending');
       }
       if (
         order.minimumTotalKobo === null ||
@@ -145,7 +145,7 @@ function memoryRepository(
           belowMinimum: order.minimumTotalKobo ?? 0,
         });
       }
-      order.pricingStatus = "manual_quoted";
+      order.pricingStatus = 'manual_quoted';
       order.totalKobo = amountKobo;
       return Promise.resolve({
         ...order,
@@ -164,14 +164,14 @@ function serviceWith(
   const memory = memoryRepository(initial, initialAreas);
   const service = createPricingService({
     repository: memory.repository,
-    logger: createLogger({ level: "silent", nodeEnv: "test" }),
+    logger: createLogger({ level: 'silent', nodeEnv: 'test' }),
   });
   return { ...memory, service };
 }
 
 const admin: AuditActor = {
-  actorId: "admin-1",
-  requestId: "request-admin-1",
+  actorId: 'admin-1',
+  requestId: 'request-admin-1',
 };
 
 let claimSequence = 0;
@@ -179,10 +179,10 @@ let claimSequence = 0;
 function claim(): IdempotencyClaim {
   claimSequence += 1;
   return {
-    actorId: "customer-1",
-    scope: "orders.create",
-    key: `orders-create-${String(claimSequence).padStart(8, "0")}`,
-    requestHash: "a".repeat(64),
+    actorId: 'customer-1',
+    scope: 'orders.create',
+    key: `orders-create-${String(claimSequence).padStart(8, '0')}`,
+    requestHash: 'a'.repeat(64),
   };
 }
 
@@ -190,33 +190,33 @@ async function place(
   service: PricingService,
   request: QuoteRequest,
 ): Promise<PricedOrder> {
-  const result = await service.createOrder("customer-1", request, claim());
-  if (result.outcome !== "created") {
-    throw new Error("expected a new order");
+  const result = await service.createOrder('customer-1', request, claim());
+  if (result.outcome !== 'created') {
+    throw new Error('expected a new order');
   }
   return result.order;
 }
 
 const local: QuoteRequest = {
-  service: "standard",
-  pickup: samplePoint("igbesa"),
-  destination: samplePoint("igbesa"),
+  service: 'standard',
+  pickup: samplePoint('igbesa'),
+  destination: samplePoint('igbesa'),
 };
 
 const automatic = {
-  quoteMode: "automatic" as const,
+  quoteMode: 'automatic' as const,
   minimumKobo: null,
 };
 
-describe("pricing service", () => {
-  it("keeps a snapshotted total after the price list changes", async () => {
+describe('pricing service', () => {
+  it('keeps a snapshotted total after the price list changes', async () => {
     const { service, orders } = serviceWith();
     const order = await place(service, local);
     expect(order.totalKobo).toBe(80_000);
 
     await service.updateRule(
-      "standard_zone",
-      "A",
+      'standard_zone',
+      'A',
       {
         ...automatic,
         amountKobo: 95_000,
@@ -231,7 +231,7 @@ describe("pricing service", () => {
     expect(order.totalKobo).toBe(80_000);
   });
 
-  it("does not let a client total replace the calculated amount due", async () => {
+  it('does not let a client total replace the calculated amount due', async () => {
     const { service, orders } = serviceWith();
     const tampered = { ...local, totalKobo: 1 } as QuoteRequest;
 
@@ -241,13 +241,13 @@ describe("pricing service", () => {
     expect(orders[0]?.totalKobo).toBe(80_000);
   });
 
-  it("stores an agreed manual price without adding it to component amounts", async () => {
+  it('stores an agreed manual price without adding it to component amounts', async () => {
     const { service, orders } = serviceWith();
     const pending = await place(service, {
-      service: "special_pickup",
-      pickup: samplePoint("igbesa"),
-      destination: samplePoint("igbesa"),
-      collection: samplePoint("ketu"),
+      service: 'special_pickup',
+      pickup: samplePoint('igbesa'),
+      destination: samplePoint('igbesa'),
+      collection: samplePoint('ketu'),
     });
     expect(pending.totalKobo).toBeNull();
     expect(pending.components[0]).toMatchObject({ amountKobo: 80_000 });
@@ -255,15 +255,15 @@ describe("pricing service", () => {
     const quoted = await service.applyManualQuote(pending.id, 200_000, admin);
 
     expect(quoted).toMatchObject({
-      pricingStatus: "manual_quoted",
+      pricingStatus: 'manual_quoted',
       totalKobo: 200_000,
     });
     expect(quoted.components[0]).toMatchObject({ amountKobo: 80_000 });
     expect(quoted.components[1]).toMatchObject({ amountKobo: null });
 
     await service.updateRule(
-      "standard_zone",
-      "A",
+      'standard_zone',
+      'A',
       {
         ...automatic,
         amountKobo: 100,
@@ -282,89 +282,89 @@ describe("pricing service", () => {
     });
   });
 
-  it("refuses to reprice an order that already has an amount due", async () => {
+  it('refuses to reprice an order that already has an amount due', async () => {
     const { service } = serviceWith();
     const order = await place(service, local);
 
     await expect(
       service.applyManualQuote(order.id, 500_000, admin),
-    ).rejects.toMatchObject({ code: "CONFLICT" });
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
   });
 
-  it("refuses a second manual quote", async () => {
+  it('refuses a second manual quote', async () => {
     const { service } = serviceWith();
     const pending = await place(service, {
-      service: "errand",
-      errandTier: "complex",
+      service: 'errand',
+      errandTier: 'complex',
     });
     await service.applyManualQuote(pending.id, 150_000, admin);
 
     await expect(
       service.applyManualQuote(pending.id, 180_000, admin),
-    ).rejects.toMatchObject({ code: "CONFLICT" });
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
   });
 
-  it("returns not found for an unknown order or rule", async () => {
+  it('returns not found for an unknown order or rule', async () => {
     const { service } = serviceWith();
 
     await expect(
-      service.applyManualQuote("missing", 150_000, admin),
-    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      service.applyManualQuote('missing', 150_000, admin),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
     await expect(
       service.updateRule(
-        "errand",
-        "missing",
+        'errand',
+        'missing',
         {
-          quoteMode: "manual",
+          quoteMode: 'manual',
           amountKobo: null,
           minimumKobo: 100_000,
         },
         admin,
       ),
-    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
-  it("reports a broken price list as unavailable", async () => {
+  it('reports a broken price list as unavailable', async () => {
     const { service } = serviceWith([]);
     await expect(service.quote(local)).rejects.toMatchObject({
-      code: "SERVICE_UNAVAILABLE",
+      code: 'SERVICE_UNAVAILABLE',
     });
   });
 
-  it("rejects an errand delivery that names only one end", async () => {
+  it('rejects an errand delivery that names only one end', async () => {
     const { service } = serviceWith();
     await expect(
       service.quote({
-        service: "errand",
-        errandTier: "simple",
-        pickup: samplePoint("igbesa"),
+        service: 'errand',
+        errandTier: 'simple',
+        pickup: samplePoint('igbesa'),
       }),
-    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
   });
 
-  it("rejects a manual quote that is not a positive whole kobo amount", async () => {
+  it('rejects a manual quote that is not a positive whole kobo amount', async () => {
     const { service, orders } = serviceWith();
     const pending = await place(service, {
-      service: "errand",
-      errandTier: "complex",
+      service: 'errand',
+      errandTier: 'complex',
     });
 
     await expect(
       service.applyManualQuote(pending.id, 0, admin),
-    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
     await expect(
       service.applyManualQuote(pending.id, 10.5, admin),
-    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
     expect(orders[0]?.totalKobo).toBeNull();
   });
 
-  it("turns a standard zone into a manual quote without an app change", async () => {
+  it('turns a standard zone into a manual quote without an app change', async () => {
     const { service } = serviceWith();
     await service.updateRule(
-      "standard_zone",
-      "A",
+      'standard_zone',
+      'A',
       {
-        quoteMode: "manual",
+        quoteMode: 'manual',
         amountKobo: null,
         minimumKobo: 90_000,
       },
@@ -372,48 +372,48 @@ describe("pricing service", () => {
     );
 
     await expect(service.quote(local)).resolves.toMatchObject({
-      pricingStatus: "pending_manual_quote",
+      pricingStatus: 'pending_manual_quote',
       totalKobo: null,
       minimumTotalKobo: 90_000,
     });
   });
 
-  it("prices Igbesa to Ketu from the map at the cross-zone fare", async () => {
+  it('prices Igbesa to Ketu from the map at the cross-zone fare', async () => {
     const { service } = serviceWith();
 
     await expect(
       service.quote({
-        service: "standard",
-        pickup: samplePoint("igbesa"),
-        destination: samplePoint("ketu"),
+        service: 'standard',
+        pickup: samplePoint('igbesa'),
+        destination: samplePoint('ketu'),
       }),
     ).resolves.toMatchObject({
       totalKobo: 130_000,
-      pickupPlace: "igbesa",
-      destinationPlace: "ketu",
+      pickupPlace: 'igbesa',
+      destinationPlace: 'ketu',
     });
   });
 
-  it("refuses a manual quote below the snapshotted floor", async () => {
+  it('refuses a manual quote below the snapshotted floor', async () => {
     const { service, orders } = serviceWith();
     const pending = await place(service, {
-      service: "standard",
-      pickup: samplePoint("igbesa"),
-      destination: samplePoint("extended"),
+      service: 'standard',
+      pickup: samplePoint('igbesa'),
+      destination: samplePoint('extended'),
     });
     expect(pending).toMatchObject({
-      pricingStatus: "pending_manual_quote",
+      pricingStatus: 'pending_manual_quote',
       totalKobo: null,
       minimumTotalKobo: 150_000,
-      destinationPlace: "extended",
+      destinationPlace: 'extended',
     });
 
     await expect(
       service.applyManualQuote(pending.id, 1, admin),
-    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
     await expect(
       service.applyManualQuote(pending.id, 149_900, admin),
-    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
     expect(orders[0]?.totalKobo).toBeNull();
 
     await expect(
@@ -421,18 +421,18 @@ describe("pricing service", () => {
     ).resolves.toMatchObject({ totalKobo: 150_000 });
   });
 
-  it("keeps an order floor when operations raises the minimum", async () => {
+  it('keeps an order floor when operations raises the minimum', async () => {
     const { service } = serviceWith();
     const pending = await place(service, {
-      service: "errand",
-      errandTier: "complex",
+      service: 'errand',
+      errandTier: 'complex',
     });
 
     await service.updateRule(
-      "errand",
-      "complex",
+      'errand',
+      'complex',
       {
-        quoteMode: "manual",
+        quoteMode: 'manual',
         amountKobo: null,
         minimumKobo: 250_000,
       },
@@ -443,14 +443,14 @@ describe("pricing service", () => {
       service.applyManualQuote(pending.id, 100_000, admin),
     ).resolves.toMatchObject({ totalKobo: 100_000 });
     await expect(
-      service.quote({ service: "errand", errandTier: "complex" }),
+      service.quote({ service: 'errand', errandTier: 'complex' }),
     ).resolves.toMatchObject({ minimumTotalKobo: 250_000 });
   });
 
-  it("does not price from a map that leaves a town uncovered", async () => {
+  it('does not price from a map that leaves a town uncovered', async () => {
     const { service } = serviceWith(APPROVED_PRICE_RULES, []);
     await expect(service.quote(local)).rejects.toMatchObject({
-      code: "SERVICE_UNAVAILABLE",
+      code: 'SERVICE_UNAVAILABLE',
     });
   });
 });

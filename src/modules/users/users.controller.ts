@@ -1,16 +1,16 @@
-import type { Request, RequestHandler } from "express";
-import type { z } from "zod";
-import { auditActor } from "../../http/middleware/authenticate.js";
-import { UnauthorizedError } from "../../http/errors.js";
-import { sendData } from "../../http/response.js";
-import type { AuthContext } from "../../types/auth.js";
+import type { Request, RequestHandler } from 'express';
+import type { z } from 'zod';
+import { auditActor } from '../../http/middleware/authenticate.js';
+import { UnauthorizedError } from '../../http/errors.js';
+import { sendData } from '../../http/response.js';
+import type { AuthContext } from '../../types/auth.js';
 import type {
   roleBodySchema,
   statusBodySchema,
   userParamsSchema,
-} from "./users.schema.js";
-import type { UsersService } from "./users.service.js";
-import type { ProfilePatch, ProvisionInput } from "./users.types.js";
+} from './users.schema.js';
+import type { UsersService } from './users.service.js';
+import type { ProfilePatch, ProvisionInput } from './users.types.js';
 
 export interface UsersController {
   show: RequestHandler;

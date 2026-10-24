@@ -1,12 +1,12 @@
-import type { Request, RequestHandler, Response } from "express";
-import { describe, expect, it } from "vitest";
-import { createUsersController } from "#src/modules/users/users.controller.js";
+import type { Request, RequestHandler, Response } from 'express';
+import { describe, expect, it } from 'vitest';
+import { createUsersController } from '#src/modules/users/users.controller.js';
 import {
   OTHER_USER_ID,
   recordingUsersService,
   userProfile,
   usersService,
-} from "../../../helpers/user.factory.js";
+} from '../../../helpers/user.factory.js';
 
 const profile = userProfile();
 const auth = { userId: profile.id, role: profile.role };
@@ -40,16 +40,16 @@ async function run(
   return captured;
 }
 
-describe("users controller", () => {
-  it("returns 401 when the request has no authenticated user", async () => {
+describe('users controller', () => {
+  it('returns 401 when the request has no authenticated user', async () => {
     const controller = createUsersController(usersService());
 
     await expect(run(controller.show, {})).rejects.toMatchObject({
       statusCode: 401,
-      code: "UNAUTHENTICATED",
+      code: 'UNAUTHENTICATED',
     });
     await expect(
-      run(controller.update, { body: { name: "Ada" } }),
+      run(controller.update, { body: { name: 'Ada' } }),
     ).rejects.toMatchObject({
       statusCode: 401,
     });
@@ -69,9 +69,9 @@ describe("users controller", () => {
     ).rejects.toMatchObject({ statusCode: 401 });
   });
 
-  it("shows the profile for the authenticated user", async () => {
+  it('shows the profile for the authenticated user', async () => {
     const { service, calls } = recordingUsersService(
-      "getProfile",
+      'getProfile',
       () => profile,
     );
     const controller = createUsersController(service);
@@ -82,10 +82,10 @@ describe("users controller", () => {
     expect(captured).toEqual({ statusCode: 200, body: { data: profile } });
   });
 
-  it("updates the authenticated user with the request body", async () => {
-    const patch = { name: "Ada", community: "ketu" as const };
+  it('updates the authenticated user with the request body', async () => {
+    const patch = { name: 'Ada', community: 'ketu' as const };
     const { service, calls } = recordingUsersService(
-      "updateOwnProfile",
+      'updateOwnProfile',
       () => ({ ...profile, ...patch }),
     );
     const controller = createUsersController(service);
@@ -95,14 +95,14 @@ describe("users controller", () => {
     expect(calls).toEqual([[auth.userId, patch]]);
     expect(captured.statusCode).toBe(200);
     expect(captured.body).toMatchObject({
-      data: { id: profile.id, name: "Ada", community: "ketu" },
+      data: { id: profile.id, name: 'Ada', community: 'ketu' },
     });
   });
 
-  it("deactivates the authenticated user", async () => {
+  it('deactivates the authenticated user', async () => {
     const { service, calls } = recordingUsersService(
-      "deactivateOwnAccount",
-      () => ({ ...profile, status: "deactivated" }),
+      'deactivateOwnAccount',
+      () => ({ ...profile, status: 'deactivated' }),
     );
     const controller = createUsersController(service);
 
@@ -111,21 +111,21 @@ describe("users controller", () => {
     expect(calls).toEqual([[auth.userId]]);
     expect(captured).toMatchObject({
       statusCode: 200,
-      body: { data: { status: "deactivated" } },
+      body: { data: { status: 'deactivated' } },
     });
   });
 
-  it("provisions an account for the authenticated admin", async () => {
-    const input = { phone: "+2348011111111", role: "admin" as const };
-    const requestId = "req-provision";
+  it('provisions an account for the authenticated admin', async () => {
+    const input = { phone: '+2348011111111', role: 'admin' as const };
+    const requestId = 'req-provision';
     const { service, calls } = recordingUsersService(
-      "provisionAccount",
+      'provisionAccount',
       () => ({ ...profile, ...input }),
     );
     const controller = createUsersController(service);
 
     const captured = await run(controller.provision, {
-      auth: { userId: auth.userId, role: "admin" },
+      auth: { userId: auth.userId, role: 'admin' },
       id: requestId,
       body: input,
     });
@@ -133,55 +133,55 @@ describe("users controller", () => {
     expect(calls).toEqual([[{ actorId: auth.userId, requestId }, input]]);
     expect(captured.statusCode).toBe(201);
     expect(captured.body).toMatchObject({
-      data: { phone: input.phone, role: "admin" },
+      data: { phone: input.phone, role: 'admin' },
     });
   });
 
-  it("sets another account status from the route id and body", async () => {
-    const requestId = "req-status";
+  it('sets another account status from the route id and body', async () => {
+    const requestId = 'req-status';
     const { service, calls } = recordingUsersService(
-      "setAccountStatus",
+      'setAccountStatus',
       (_actor, id, status) => ({ ...profile, id, status }),
     );
     const controller = createUsersController(service);
 
     const captured = await run(controller.setStatus, {
-      auth: { userId: auth.userId, role: "admin" },
+      auth: { userId: auth.userId, role: 'admin' },
       id: requestId,
       params: { id: OTHER_USER_ID },
-      body: { status: "deactivated" },
+      body: { status: 'deactivated' },
     });
 
     expect(calls).toEqual([
-      [{ actorId: auth.userId, requestId }, OTHER_USER_ID, "deactivated"],
+      [{ actorId: auth.userId, requestId }, OTHER_USER_ID, 'deactivated'],
     ]);
     expect(captured).toMatchObject({
       statusCode: 200,
-      body: { data: { id: OTHER_USER_ID, status: "deactivated" } },
+      body: { data: { id: OTHER_USER_ID, status: 'deactivated' } },
     });
   });
 
-  it("sets another account role from the route id and body", async () => {
-    const requestId = "req-role";
+  it('sets another account role from the route id and body', async () => {
+    const requestId = 'req-role';
     const { service, calls } = recordingUsersService(
-      "setAccountRole",
+      'setAccountRole',
       (_actor, id, role) => ({ ...profile, id, role }),
     );
     const controller = createUsersController(service);
 
     const captured = await run(controller.setRole, {
-      auth: { userId: auth.userId, role: "admin" },
+      auth: { userId: auth.userId, role: 'admin' },
       id: requestId,
       params: { id: OTHER_USER_ID },
-      body: { role: "admin" },
+      body: { role: 'admin' },
     });
 
     expect(calls).toEqual([
-      [{ actorId: auth.userId, requestId }, OTHER_USER_ID, "admin"],
+      [{ actorId: auth.userId, requestId }, OTHER_USER_ID, 'admin'],
     ]);
     expect(captured).toMatchObject({
       statusCode: 200,
-      body: { data: { id: OTHER_USER_ID, role: "admin" } },
+      body: { data: { id: OTHER_USER_ID, role: 'admin' } },
     });
   });
 });
