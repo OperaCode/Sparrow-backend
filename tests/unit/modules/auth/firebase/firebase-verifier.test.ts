@@ -96,6 +96,8 @@ describe('Firebase ID token verifier', () => {
     'auth/argument-error',
     'auth/id-token-expired',
     'auth/id-token-revoked',
+    'auth/invalid-id-token',
+    'auth/invalid-user-token',
     'auth/user-disabled',
     'auth/user-not-found',
   ])('maps %s to a generic 401 and logs only the code', async (code) => {

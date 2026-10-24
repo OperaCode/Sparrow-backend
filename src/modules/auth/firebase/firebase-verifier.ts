@@ -49,6 +49,8 @@ const REJECTED_TOKEN_CODES: ReadonlySet<string> = new Set([
   'auth/argument-error',
   'auth/id-token-expired',
   'auth/id-token-revoked',
+  'auth/invalid-id-token',
+  'auth/invalid-user-token',
   'auth/user-disabled',
   'auth/user-not-found',
 ]);

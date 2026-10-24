@@ -226,7 +226,10 @@ describe('POST /api/v1/auth/firebase', () => {
   it.each([
     'auth/id-token-expired',
     'auth/id-token-revoked',
+    'auth/invalid-id-token',
+    'auth/invalid-user-token',
     'auth/user-disabled',
+    'auth/user-not-found',
     'auth/argument-error',
   ])('returns a uniform 401 when Firebase reports %s', async (code) => {
     const auth = authApp();
