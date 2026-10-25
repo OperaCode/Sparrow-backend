@@ -4,6 +4,7 @@ import {
   ServiceUnavailableError,
   ValidationError,
 } from "../../http/errors.js";
+import type { CreatedAtPage, PageSlice } from "../../http/pagination.js";
 import type { Logger } from "../../lib/logger.js";
 import type { AuditActor } from "../../types/auth.js";
 import type { IdempotencyClaim } from "../../types/idempotency.js";
@@ -17,6 +18,8 @@ import { isChargeableKobo } from "./pricing.money.js";
 import type { PricingRepository } from "./pricing.repository.js";
 import type {
   AreaBox,
+  OperationsOrder,
+  OrderRequest,
   PriceQuote,
   PriceRuleRecord,
   PricedOrder,
@@ -35,9 +38,14 @@ export interface PricingService {
   quote(request: QuoteRequest): Promise<PriceQuote>;
   createOrder(
     customerId: string,
-    request: QuoteRequest,
+    request: OrderRequest,
     claim: IdempotencyClaim,
   ): Promise<CreateOrderResult>;
+  listOrders(
+    page: CreatedAtPage,
+    serviceType?: OrderRequest["service"],
+  ): Promise<PageSlice<OperationsOrder>>;
+  getOrder(id: string): Promise<OperationsOrder>;
   updateRule(
     component: PricingComponent,
     tier: string,
@@ -64,6 +72,23 @@ interface PricingServiceOptions {
 /**
  * Turns a broken price list into a client-safe 503. The detail stays in the log.
  */
+/**
+ * Pricing sees the collection coordinate only. The address and contact are
+ * not a zone and cannot change the fee.
+ */
+function quoteRequestOf(request: OrderRequest): QuoteRequest {
+  if (request.service !== "special_pickup") return request;
+  return {
+    service: "special_pickup",
+    pickup: request.pickup,
+    destination: request.destination,
+    collection: {
+      latitude: request.collection.latitude,
+      longitude: request.collection.longitude,
+    },
+  };
+}
+
 function unavailable(logger: Logger, error: PricingConfigurationError): never {
   logger.error({ err: error }, "Pricing configuration is incomplete");
   throw new ServiceUnavailableError("Pricing is temporarily unavailable");
@@ -116,12 +141,13 @@ export function createPricingService(
     },
 
     async createOrder(customerId, request, claim) {
+      const priced = quoteRequestOf(request);
       const result = await guardConfiguration(() =>
         repository.createPricedOrder({
           customerId,
           request,
           claim,
-          quoteFromRules: (rules, areas) => price(request, rules, areas),
+          quoteFromRules: (rules, areas) => price(priced, rules, areas),
         }),
       );
       if (result.outcome === "mismatch") {
@@ -137,6 +163,16 @@ export function createPricingService(
         );
       }
       return result;
+    },
+
+    listOrders(page, serviceType) {
+      return guardConfiguration(() => repository.listOrders(page, serviceType));
+    },
+
+    async getOrder(id) {
+      const order = await guardConfiguration(() => repository.getOrder(id));
+      if (order === null) throw new NotFoundError("Order not found");
+      return order;
     },
 
     async updateRule(component, tier, patch, actor) {

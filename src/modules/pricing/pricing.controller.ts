@@ -3,6 +3,7 @@ import type { z } from "zod";
 import { UnauthorizedError } from "../../http/errors.js";
 import { auditActor } from "../../http/middleware/authenticate.js";
 import { IDEMPOTENCY_REPLAYED_HEADER } from "../../http/middleware/idempotency.js";
+import { createdAtPage, pageMeta } from "../../http/pagination.js";
 import { sendData } from "../../http/response.js";
 import type { AuthContext } from "../../types/auth.js";
 import type {
@@ -10,15 +11,22 @@ import type {
   areaParamsSchema,
   manualQuoteBodySchema,
   orderParamsSchema,
+  ordersListQuerySchema,
   ruleParamsSchema,
   updateRuleBodySchema,
 } from "./pricing.schema.js";
 import type { PricingService } from "./pricing.service.js";
-import { CURRENCY, type QuoteRequest } from "./pricing.types.js";
+import {
+  CURRENCY,
+  type OrderRequest,
+  type QuoteRequest,
+} from "./pricing.types.js";
 
 export interface PricingController {
   quote: RequestHandler;
   createOrder: RequestHandler;
+  listOrders: RequestHandler;
+  showOrder: RequestHandler;
   updateRule: RequestHandler;
   updateArea: RequestHandler;
   applyManualQuote: RequestHandler;
@@ -50,7 +58,7 @@ export function createPricingController(
       }
       const result = await service.createOrder(
         userId,
-        bodyOf(req) as QuoteRequest,
+        bodyOf(req) as OrderRequest,
         claim,
       );
       if (result.outcome === "replay") {
@@ -59,6 +67,24 @@ export function createPricingController(
         return;
       }
       sendData(res, result.order, { status: 201 });
+    },
+
+    listOrders: async (req, res) => {
+      const query = req.query as unknown as z.output<
+        typeof ordersListQuerySchema
+      >;
+      const page = await service.listOrders(
+        createdAtPage(query),
+        query.serviceType,
+      );
+      sendData(res, page.items, {
+        meta: pageMeta(query.limit, page.nextCursor),
+      });
+    },
+
+    showOrder: async (req, res) => {
+      const params = req.params as z.output<typeof orderParamsSchema>;
+      sendData(res, await service.getOrder(params.id));
     },
 
     updateRule: async (req, res) => {

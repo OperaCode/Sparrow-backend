@@ -246,14 +246,14 @@ export const ridersModule: V1Module = {
 
 `requireRole` is a coarse role gate. Ownership checks, such as a customer reading only their own deliveries, belong in services. Mounting `requireRole` or `idempotency` without `authenticate` fails closed with a 500.
 
-Order creation, which is what a later payment is collected against:
+Order creation, which is what a later payment is collected against. A price preview (`POST /api/v1/pricing/quotes`) stays coordinates only. Creating a Special Pickup also requires the third-party collection address and contact; that stop is stored on its own row, and the collection fee is added to the zone fee. Standard Delivery and Errand reject a collection. `GET /api/v1/orders` is admin-only and includes `collection` so Operations can see the extra leg (`kind: "collection"`). It is null for the other two services.
 
 ```ts
 router.post(
   "/",
   authenticate,
   requireRole("customer"),
-  validate({ body: quoteBodySchema }),
+  validate({ body: createOrderBodySchema }),
   idempotency("orders.create"),
   controller.createOrder,
 );
