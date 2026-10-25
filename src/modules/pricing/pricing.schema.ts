@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { listQuerySchema } from '../../http/pagination.js';
 import {
   ERRAND_TIERS,
   MAX_AMOUNT_KOBO,
@@ -6,6 +7,11 @@ import {
   QUOTE_MODES,
   SERVICE_AREA_PLACES,
 } from './pricing.types.js';
+
+const SERVICE_TYPES = ['standard', 'special_pickup', 'errand'] as const;
+
+/** Same E.164 rule as a user phone. A collection contact is not an account. */
+const PHONE_PATTERN = /^\+[1-9][0-9]{7,14}$/;
 
 const amountSchema = z.number().int().positive().max(MAX_AMOUNT_KOBO);
 
@@ -49,6 +55,60 @@ export const quoteBodySchema = z
       });
     }
   });
+
+/**
+ * Special Pickup collection. The coordinate is classified for the fee. The
+ * address and contact are the third-party stop, and are not a zone name.
+ */
+const collectionStopSchema = z.strictObject({
+  latitude: z.number().gte(-90).lte(90),
+  longitude: z.number().gte(-180).lte(180),
+  address: z.string().trim().min(1).max(200),
+  landmark: z.string().trim().min(1).max(120).optional(),
+  contactName: z.string().trim().min(1).max(80),
+  contactPhone: z.string().regex(PHONE_PATTERN, 'Phone must be in E.164 form'),
+});
+
+/**
+ * Order create. Standard Delivery and Errand stay coordinate or task bodies.
+ * Special Pickup requires its own collection stop, so a delivery pickup cannot
+ * stand in for the third party and an errand cannot be priced as one.
+ */
+export const createOrderBodySchema = z
+  .discriminatedUnion('service', [
+    z.strictObject({
+      service: z.literal('standard'),
+      pickup: coordinateSchema,
+      destination: coordinateSchema,
+    }),
+    z.strictObject({
+      service: z.literal('special_pickup'),
+      pickup: coordinateSchema,
+      destination: coordinateSchema,
+      collection: collectionStopSchema,
+    }),
+    z.strictObject({
+      service: z.literal('errand'),
+      errandTier: z.enum(ERRAND_TIERS),
+      pickup: coordinateSchema.optional(),
+      destination: coordinateSchema.optional(),
+    }),
+  ])
+  .superRefine((value, ctx) => {
+    if (value.service !== 'errand') return;
+    if ((value.pickup === undefined) !== (value.destination === undefined)) {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'Pickup and destination are both required when an errand includes delivery',
+        path: ['destination'],
+      });
+    }
+  });
+
+export const ordersListQuerySchema = listQuerySchema({
+  serviceType: z.enum(SERVICE_TYPES).optional(),
+});
 
 export const updateRuleBodySchema = z
   .strictObject({

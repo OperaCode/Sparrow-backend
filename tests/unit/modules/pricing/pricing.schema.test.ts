@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { samplePoint } from '../../../../src/modules/pricing/pricing.areas.js';
 import {
+  createOrderBodySchema,
   manualQuoteBodySchema,
   quoteBodySchema,
   updateRuleBodySchema,
@@ -65,6 +66,90 @@ describe('quote request schema', () => {
         destination: samplePoint('lusada'),
       }).success,
     ).toBe(true);
+  });
+});
+
+const collectionStop = {
+  ...samplePoint('lusada'),
+  address: '  14 Market Road  ',
+  contactName: '  Ada Okonkwo  ',
+  contactPhone: '+2348011111111',
+};
+
+describe('special pickup order schema', () => {
+  const special = {
+    service: 'special_pickup',
+    pickup: samplePoint('igbesa'),
+    destination: samplePoint('igbesa'),
+    collection: collectionStop,
+  };
+
+  it('requires a separate collection address and contact', () => {
+    const parsed = createOrderBodySchema.safeParse(special);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data).toMatchObject({
+      service: 'special_pickup',
+      collection: {
+        address: '14 Market Road',
+        contactName: 'Ada Okonkwo',
+        contactPhone: '+2348011111111',
+      },
+    });
+  });
+
+  it('rejects a coordinate with no contact', () => {
+    expect(
+      createOrderBodySchema.safeParse({
+        ...special,
+        collection: samplePoint('lusada'),
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects a collection contact on a price preview', () => {
+    expect(quoteBodySchema.safeParse(special).success).toBe(false);
+    expect(
+      quoteBodySchema.safeParse({
+        ...special,
+        collection: samplePoint('lusada'),
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a client fee on the collection', () => {
+    expect(
+      createOrderBodySchema.safeParse({
+        ...special,
+        collection: { ...collectionStop, amountKobo: 50000 },
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each(['08012345678', '2348011111111', '+234'])(
+    'rejects collection phone %s',
+    (contactPhone) => {
+      expect(
+        createOrderBodySchema.safeParse({
+          ...special,
+          collection: { ...collectionStop, contactPhone },
+        }).success,
+      ).toBe(false);
+    },
+  );
+
+  it('does not accept a collection on standard delivery or an errand', () => {
+    expect(
+      createOrderBodySchema.safeParse({ ...local, collection: collectionStop })
+        .success,
+    ).toBe(false);
+    expect(
+      createOrderBodySchema.safeParse({
+        service: 'errand',
+        errandTier: 'simple',
+        collection: collectionStop,
+      }).success,
+    ).toBe(false);
   });
 });
 
