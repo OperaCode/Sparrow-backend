@@ -1,4 +1,9 @@
 import { Prisma } from "../../generated/prisma/client.js";
+import {
+  slicePage,
+  type CreatedAtPage,
+  type PageSlice,
+} from "../../http/pagination.js";
 import type { PrismaClient } from "../../lib/prisma.js";
 import type { AuditActor } from "../../types/auth.js";
 import type { IdempotencyClaim } from "../../types/idempotency.js";
@@ -15,8 +20,11 @@ import {
 } from "./pricing.money.js";
 import type {
   AreaBox,
+  CollectionLeg,
   Coordinate,
   ErrandTier,
+  OperationsOrder,
+  OrderRequest,
   Place,
   PriceComponentQuote,
   PriceQuote,
@@ -24,7 +32,6 @@ import type {
   PricedOrder,
   PricingComponent,
   PricingStatus,
-  QuoteRequest,
   RuleUpdate,
   ServiceArea,
   ServiceAreaPlace,
@@ -32,7 +39,7 @@ import type {
   ZoneTier,
 } from "./pricing.types.js";
 
-type ServiceType = QuoteRequest["service"];
+type ServiceType = OrderRequest["service"];
 
 interface SnapshotRow {
   id: string;
@@ -49,6 +56,16 @@ interface SnapshotRow {
   pickupPlace: Place | null;
   destinationPlace: Place | null;
   collectionPlace: Place | null;
+  collectionLatitude: number | null;
+  collectionLongitude: number | null;
+}
+
+/** Address and contact for the third-party stop. Coordinates live on the order. */
+interface StoredCollection {
+  address: string;
+  landmark: string | null;
+  contactName: string;
+  contactPhone: string;
 }
 
 export type ManualQuoteWriteResult =
@@ -58,7 +75,7 @@ export type AreaWriteResult = ServiceArea | "missing" | "invalid";
 
 export interface CreatePricedOrderArgs {
   customerId: string;
-  request: QuoteRequest;
+  request: OrderRequest;
   claim: IdempotencyClaim;
   quoteFromRules: (
     rules: readonly PriceRuleRecord[],
@@ -89,7 +106,11 @@ export interface PricingRepository {
   createPricedOrder(
     args: CreatePricedOrderArgs,
   ): Promise<CreatePricedOrderResult>;
-  findOrder(id: string): Promise<PricedOrder | null>;
+  listOrders(
+    page: CreatedAtPage,
+    serviceType?: ServiceType,
+  ): Promise<PageSlice<OperationsOrder>>;
+  getOrder(id: string): Promise<OperationsOrder | null>;
   applyManualQuote(
     id: string,
     amountKobo: number,
@@ -137,7 +158,44 @@ function toArea(row: {
   };
 }
 
-function toPricedOrder(row: SnapshotRow): PricedOrder {
+function collectionLeg(
+  row: SnapshotRow,
+  collection: StoredCollection | null,
+): CollectionLeg | null {
+  if (row.serviceType !== "special_pickup") {
+    if (collection !== null) {
+      throw new PricingConfigurationError(
+        "A collection is stored on a service that is not Special Pickup",
+      );
+    }
+    return null;
+  }
+  if (
+    collection === null ||
+    row.collectionPlace === null ||
+    row.collectionLatitude === null ||
+    row.collectionLongitude === null
+  ) {
+    throw new PricingConfigurationError(
+      "Special pickup is missing its collection",
+    );
+  }
+  return {
+    kind: "collection",
+    address: collection.address,
+    landmark: collection.landmark,
+    contactName: collection.contactName,
+    contactPhone: collection.contactPhone,
+    latitude: row.collectionLatitude,
+    longitude: row.collectionLongitude,
+    place: row.collectionPlace,
+  };
+}
+
+function toPricedOrder(
+  row: SnapshotRow,
+  collection: StoredCollection | null,
+): PricedOrder {
   const components: PriceComponentQuote[] = [];
   if (row.errandTier !== null) {
     components.push({
@@ -177,6 +235,18 @@ function toPricedOrder(row: SnapshotRow): PricedOrder {
     pickupPlace: row.pickupPlace,
     destinationPlace: row.destinationPlace,
     collectionPlace: row.collectionPlace,
+    collection: collectionLeg(row, collection),
+  };
+}
+
+function toOperationsOrder(
+  row: SnapshotRow & { customerId: string; createdAt: Date },
+  collection: StoredCollection | null,
+): OperationsOrder {
+  return {
+    ...toPricedOrder(row, collection),
+    customerId: row.customerId,
+    createdAt: row.createdAt,
   };
 }
 
@@ -226,6 +296,8 @@ interface ManualQuoteRow {
   pickupPlace: string | null;
   destinationPlace: string | null;
   collectionPlace: string | null;
+  collectionLatitude: number | null;
+  collectionLongitude: number | null;
 }
 
 function wholeKobo(value: number | string | bigint | null): number | null {
@@ -243,6 +315,7 @@ function wholeKobo(value: number | string | bigint | null): number | null {
 function orderFromManualQuote(
   row: ManualQuoteRow,
   amountKobo: number,
+  collection: StoredCollection | null,
 ): PricedOrder {
   const totalKobo = wholeKobo(row.totalKobo);
   if (totalKobo !== amountKobo) {
@@ -250,22 +323,27 @@ function orderFromManualQuote(
       "Manual quote was not stored as entered",
     );
   }
-  return toPricedOrder({
-    id: row.id,
-    serviceType: row.serviceType as ServiceType,
-    pricingStatus: "manual_quoted",
-    errandTier: row.errandTier as ErrandTier | null,
-    errandAmountKobo: wholeKobo(row.errandAmountKobo),
-    zoneTier: row.zoneTier as ZoneTier | null,
-    zoneAmountKobo: wholeKobo(row.zoneAmountKobo),
-    specialPickupTier: row.specialPickupTier as SpecialPickupTier | null,
-    specialPickupAmountKobo: wholeKobo(row.specialPickupAmountKobo),
-    totalKobo,
-    minimumTotalKobo: wholeKobo(row.minimumTotalKobo),
-    pickupPlace: row.pickupPlace as Place | null,
-    destinationPlace: row.destinationPlace as Place | null,
-    collectionPlace: row.collectionPlace as Place | null,
-  });
+  return toPricedOrder(
+    {
+      id: row.id,
+      serviceType: row.serviceType as ServiceType,
+      pricingStatus: "manual_quoted",
+      errandTier: row.errandTier as ErrandTier | null,
+      errandAmountKobo: wholeKobo(row.errandAmountKobo),
+      zoneTier: row.zoneTier as ZoneTier | null,
+      zoneAmountKobo: wholeKobo(row.zoneAmountKobo),
+      specialPickupTier: row.specialPickupTier as SpecialPickupTier | null,
+      specialPickupAmountKobo: wholeKobo(row.specialPickupAmountKobo),
+      totalKobo,
+      minimumTotalKobo: wholeKobo(row.minimumTotalKobo),
+      pickupPlace: row.pickupPlace as Place | null,
+      destinationPlace: row.destinationPlace as Place | null,
+      collectionPlace: row.collectionPlace as Place | null,
+      collectionLatitude: row.collectionLatitude,
+      collectionLongitude: row.collectionLongitude,
+    },
+    collection,
+  );
 }
 
 function coordinateOrNull(point: Coordinate | undefined): {
@@ -276,9 +354,19 @@ function coordinateOrNull(point: Coordinate | undefined): {
   return { latitude: point.latitude, longitude: point.longitude };
 }
 
+function storedCollection(request: OrderRequest): StoredCollection | null {
+  if (request.service !== "special_pickup") return null;
+  return {
+    address: request.collection.address,
+    landmark: request.collection.landmark ?? null,
+    contactName: request.collection.contactName,
+    contactPhone: request.collection.contactPhone,
+  };
+}
+
 function orderCreateData(
   customerId: string,
-  request: QuoteRequest,
+  request: OrderRequest,
   quote: PriceQuote,
 ): Prisma.OrderCreateInput {
   const pickup = coordinateOrNull(
@@ -329,9 +417,26 @@ export function createPricingRepository(
 ): PricingRepository {
   const audit = createAuditRepository();
 
-  async function findOrder(id: string): Promise<PricedOrder | null> {
-    const row = await prisma.order.findUnique({ where: { id } });
-    return row === null ? null : toPricedOrder(row);
+  function pageWhere(
+    page: CreatedAtPage,
+    serviceType: ServiceType | undefined,
+  ): Prisma.OrderWhereInput {
+    const cursor =
+      page.cursor === null
+        ? {}
+        : {
+            OR: [
+              { createdAt: { lt: page.cursor.createdAt } },
+              {
+                createdAt: page.cursor.createdAt,
+                id: { lt: page.cursor.id },
+              },
+            ],
+          };
+    return {
+      ...(serviceType === undefined ? {} : { serviceType }),
+      ...cursor,
+    };
   }
 
   return {
@@ -464,9 +569,10 @@ export function createPricingRepository(
     /**
      * Reads the price list and inserts the snapshot in one transaction, so
      * the stored total is the list at that moment and later edits miss it.
-     * The idempotency result is inserted in that same transaction. A rollback
-     * removes both. A unique violation means this key already committed, so
-     * the stored result is returned.
+     * The idempotency result and, for Special Pickup, the collection stop are
+     * inserted in that same transaction. A rollback removes all of them. A
+     * unique violation means this key already committed, so the stored result
+     * is returned.
      */
     async createPricedOrder({ customerId, request, claim, quoteFromRules }) {
       try {
@@ -490,10 +596,16 @@ export function createPricingRepository(
               "Refusing to store a quote whose total does not match its components",
             );
           }
+          const contact = storedCollection(request);
           const row = await tx.order.create({
             data: orderCreateData(customerId, request, quote),
           });
-          const created = toPricedOrder(row);
+          if (contact !== null) {
+            await tx.orderCollection.create({
+              data: { orderId: row.id, ...contact },
+            });
+          }
+          const created = toPricedOrder(row, contact);
           await saveIdempotentResult(tx, claim, 201, { data: created });
           return created;
         });
@@ -506,7 +618,27 @@ export function createPricingRepository(
       }
     },
 
-    findOrder,
+    async listOrders(page, serviceType) {
+      const rows = await prisma.order.findMany({
+        where: pageWhere(page, serviceType),
+        include: { collection: true },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: page.limit + 1,
+      });
+      return slicePage(
+        rows.map((row) => toOperationsOrder(row, row.collection)),
+        page.limit,
+      );
+    },
+
+    async getOrder(id) {
+      const row = await prisma.order.findUnique({
+        where: { id },
+        include: { collection: true },
+      });
+      if (row === null) return null;
+      return toOperationsOrder(row, row.collection);
+    },
 
     /**
      * One conditional update returns the row that was written. A follow-up
@@ -542,10 +674,15 @@ export function createPricingRepository(
             "minimum_total_kobo" AS "minimumTotalKobo",
             "pickup_place"::text AS "pickupPlace",
             "destination_place"::text AS "destinationPlace",
-            "collection_place"::text AS "collectionPlace"
+            "collection_place"::text AS "collectionPlace",
+            "collection_latitude" AS "collectionLatitude",
+            "collection_longitude" AS "collectionLongitude"
         `;
         const written = rows[0];
         if (written !== undefined) {
+          const contact = await tx.orderCollection.findUnique({
+            where: { orderId: id },
+          });
           await audit.record(tx, {
             actorId: actor.actorId,
             requestId: actor.requestId,
@@ -554,7 +691,7 @@ export function createPricingRepository(
             targetId: id,
             metadata: { amountKobo },
           });
-          return orderFromManualQuote(written, amountKobo);
+          return orderFromManualQuote(written, amountKobo, contact);
         }
 
         const existing = await tx.order.findUnique({

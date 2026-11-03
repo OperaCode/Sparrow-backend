@@ -9,7 +9,9 @@ import {
   areaBodySchema,
   areaParamsSchema,
   manualQuoteBodySchema,
+  createOrderBodySchema,
   orderParamsSchema,
+  ordersListQuerySchema,
   quoteBodySchema,
   ruleParamsSchema,
   updateRuleBodySchema,
@@ -66,9 +68,23 @@ export function createPricingModules(deps: {
         "/",
         authenticate,
         requireRole("customer"),
-        validate({ body: quoteBodySchema }),
+        validate({ body: createOrderBodySchema }),
         idempotency("orders.create"),
         controller.createOrder,
+      );
+      router.get(
+        "/",
+        authenticate,
+        requireRole("admin"),
+        validate({ query: ordersListQuerySchema }),
+        controller.listOrders,
+      );
+      router.get(
+        "/:id",
+        authenticate,
+        requireRole("admin"),
+        validate({ params: orderParamsSchema }),
+        controller.showOrder,
       );
       router.post(
         "/:id/manual-quote",

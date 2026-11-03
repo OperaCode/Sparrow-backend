@@ -9,6 +9,7 @@ import {
 import { APPROVED_PRICE_RULES } from "#src/modules/pricing/pricing.catalog.js";
 import { assertServiceAreaMap } from "#src/modules/pricing/pricing.locate.js";
 import { PricingConfigurationError } from "#src/modules/pricing/pricing.money.js";
+import { slicePage } from "#src/http/pagination.js";
 import type {
   CreatePricedOrderArgs,
   ManualQuoteWriteResult,
@@ -19,16 +20,34 @@ import {
   type PricingService,
 } from "#src/modules/pricing/pricing.service.js";
 import type {
+  CollectionLeg,
+  OperationsOrder,
+  OrderRequest,
   PriceRuleRecord,
   PricedOrder,
-  QuoteRequest,
   RuleUpdate,
   ServiceArea,
 } from "#src/modules/pricing/pricing.types.js";
 
 interface Memory {
   repository: PricingRepository;
-  orders: PricedOrder[];
+  orders: OperationsOrder[];
+}
+
+function toPriced(order: OperationsOrder): PricedOrder {
+  return {
+    id: order.id,
+    serviceType: order.serviceType,
+    pricingStatus: order.pricingStatus,
+    currency: order.currency,
+    components: order.components.map((component) => ({ ...component })),
+    totalKobo: order.totalKobo,
+    minimumTotalKobo: order.minimumTotalKobo,
+    pickupPlace: order.pickupPlace,
+    destinationPlace: order.destinationPlace,
+    collectionPlace: order.collectionPlace,
+    collection: order.collection === null ? null : { ...order.collection },
+  };
 }
 
 function memoryRepository(
@@ -37,7 +56,7 @@ function memoryRepository(
 ): Memory {
   const rules = initial.map((rule) => ({ ...rule }));
   const areas = initialAreas.map((area) => ({ ...area }));
-  const orders: PricedOrder[] = [];
+  const orders: OperationsOrder[] = [];
   const saved = new Map<string, { hash: string; order: PricedOrder }>();
 
   const repository: PricingRepository = {
@@ -81,6 +100,7 @@ function memoryRepository(
     },
 
     createPricedOrder({
+      customerId,
       request,
       quoteFromRules,
       claim,
@@ -101,8 +121,23 @@ function memoryRepository(
         rules.map((rule) => ({ ...rule })),
         areas.map((area) => ({ ...area })),
       );
-      const order: PricedOrder = {
+      const collection: CollectionLeg | null =
+        request.service === "special_pickup" && quote.collectionPlace !== null
+          ? {
+              kind: "collection",
+              address: request.collection.address,
+              landmark: request.collection.landmark ?? null,
+              contactName: request.collection.contactName,
+              contactPhone: request.collection.contactPhone,
+              latitude: request.collection.latitude,
+              longitude: request.collection.longitude,
+              place: quote.collectionPlace,
+            }
+          : null;
+      const order: OperationsOrder = {
         id: `order-${orders.length + 1}`,
+        customerId,
+        createdAt: new Date(),
         serviceType: request.service,
         pricingStatus: quote.pricingStatus,
         currency: "NGN",
@@ -112,22 +147,44 @@ function memoryRepository(
         pickupPlace: quote.pickupPlace,
         destinationPlace: quote.destinationPlace,
         collectionPlace: quote.collectionPlace,
+        collection,
       };
       orders.push(order);
-      const copy = {
-        ...order,
-        components: order.components.map((component) => ({ ...component })),
-      };
+      const copy = toPriced(order);
       saved.set(id, { hash: claim.requestHash, order: copy });
       return Promise.resolve({ outcome: "created", order: copy });
     },
 
-    findOrder(id) {
+    listOrders(page, serviceType) {
+      const filtered = orders
+        .filter(
+          (order) =>
+            serviceType === undefined || order.serviceType === serviceType,
+        )
+        .sort((left, right) => {
+          const byTime = right.createdAt.getTime() - left.createdAt.getTime();
+          if (byTime !== 0) return byTime;
+          if (left.id === right.id) return 0;
+          return left.id < right.id ? 1 : -1;
+        })
+        .filter((order) => {
+          if (page.cursor === null) return true;
+          if (order.createdAt < page.cursor.createdAt) return true;
+          return (
+            order.createdAt.getTime() === page.cursor.createdAt.getTime() &&
+            order.id < page.cursor.id
+          );
+        });
+      return Promise.resolve(slicePage(filtered, page.limit));
+    },
+
+    getOrder(id) {
       const order = orders.find((item) => item.id === id);
       if (order === undefined) return Promise.resolve(null);
       return Promise.resolve({
-        ...order,
-        components: order.components.map((component) => ({ ...component })),
+        ...toPriced(order),
+        customerId: order.customerId,
+        createdAt: order.createdAt,
       });
     },
 
@@ -147,10 +204,7 @@ function memoryRepository(
       }
       order.pricingStatus = "manual_quoted";
       order.totalKobo = amountKobo;
-      return Promise.resolve({
-        ...order,
-        components: order.components.map((component) => ({ ...component })),
-      });
+      return Promise.resolve(toPriced(order));
     },
   };
 
@@ -188,7 +242,7 @@ function claim(): IdempotencyClaim {
 
 async function place(
   service: PricingService,
-  request: QuoteRequest,
+  request: OrderRequest,
 ): Promise<PricedOrder> {
   const result = await service.createOrder("customer-1", request, claim());
   if (result.outcome !== "created") {
@@ -197,7 +251,7 @@ async function place(
   return result.order;
 }
 
-const local: QuoteRequest = {
+const local: OrderRequest = {
   service: "standard",
   pickup: samplePoint("igbesa"),
   destination: samplePoint("igbesa"),
@@ -233,7 +287,7 @@ describe("pricing service", () => {
 
   it("does not let a client total replace the calculated amount due", async () => {
     const { service, orders } = serviceWith();
-    const tampered = { ...local, totalKobo: 1 } as QuoteRequest;
+    const tampered = { ...local, totalKobo: 1 } as OrderRequest;
 
     const order = await place(service, tampered);
 
@@ -247,7 +301,12 @@ describe("pricing service", () => {
       service: "special_pickup",
       pickup: samplePoint("igbesa"),
       destination: samplePoint("igbesa"),
-      collection: samplePoint("ketu"),
+      collection: {
+        ...samplePoint("ketu"),
+        address: "2 Ketu Road",
+        contactName: "Ada Okonkwo",
+        contactPhone: "+2348011111111",
+      },
     });
     expect(pending.totalKobo).toBeNull();
     expect(pending.components[0]).toMatchObject({ amountKobo: 80_000 });
@@ -280,6 +339,66 @@ describe("pricing service", () => {
         expect.objectContaining({ amountKobo: null }),
       ],
     });
+  });
+
+  it("adds the collection fee without folding it into the delivery", async () => {
+    const { service } = serviceWith();
+    const order = await place(service, {
+      service: "special_pickup",
+      pickup: samplePoint("igbesa"),
+      destination: samplePoint("igbesa"),
+      collection: {
+        ...samplePoint("lusada"),
+        address: "  14 Market Road  ",
+        landmark: "Opposite the pharmacy",
+        contactName: "Ada Okonkwo",
+        contactPhone: "+2348011111111",
+      },
+    });
+
+    expect(order.totalKobo).toBe(150_000);
+    expect(order.components).toEqual([
+      expect.objectContaining({
+        component: "standard_zone",
+        tier: "A",
+        amountKobo: 80_000,
+      }),
+      expect.objectContaining({
+        component: "special_pickup",
+        tier: "nearby",
+        amountKobo: 70_000,
+      }),
+    ]);
+    expect(order.pickupPlace).toBe("igbesa");
+    expect(order.collection).toMatchObject({
+      kind: "collection",
+      place: "lusada",
+      contactName: "Ada Okonkwo",
+      contactPhone: "+2348011111111",
+    });
+
+    const standard = await place(service, local);
+    expect(standard.collection).toBeNull();
+    expect(standard.components.map((component) => component.component)).toEqual(
+      ["standard_zone"],
+    );
+
+    const errand = await place(service, {
+      service: "errand",
+      errandTier: "simple",
+    });
+    expect(errand.collection).toBeNull();
+    expect(errand.components.map((component) => component.component)).toEqual([
+      "errand",
+    ]);
+
+    const listed = await service.listOrders(
+      { limit: 20, cursor: null },
+      "special_pickup",
+    );
+    expect(listed.items).toHaveLength(1);
+    expect(listed.items[0]?.collection?.kind).toBe("collection");
+    expect(listed.items[0]?.collection?.place).toBe("lusada");
   });
 
   it("refuses to reprice an order that already has an amount due", async () => {

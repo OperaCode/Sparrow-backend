@@ -225,8 +225,29 @@ model Order {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
+  /// Third-party collection. Present only for a Special Pickup, never for a
+  /// Standard Delivery or an Errand.
+  collection OrderCollection?
+
   @@index([customerId])
+  @@index([createdAt, id])
+  @@index([serviceType, createdAt, id])
   @@map("orders")
+}
+
+/// The extra collection movement. Address and contact are operational facts.
+/// The classified place and fee stay on the order as the pricing snapshot.
+/// A Standard Delivery has no row here. An Errand is a task, not a collection.
+model OrderCollection {
+  orderId      String   @id @map("order_id") @db.Uuid
+  order        Order    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  address      String   @db.VarChar(200)
+  landmark     String?  @db.VarChar(120)
+  contactName  String   @map("contact_name") @db.VarChar(80)
+  contactPhone String   @map("contact_phone") @db.VarChar(16)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@map("order_collections")
 }
 
 enum IdempotencyState {

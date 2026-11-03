@@ -86,6 +86,29 @@ export type QuoteRequest =
       destination?: Coordinate;
     };
 
+/** Who holds the item at the third-party collection. Not a delivery contact. */
+export interface CollectionContact {
+  address: string;
+  landmark?: string;
+  contactName: string;
+  contactPhone: string;
+}
+
+/**
+ * A Special Pickup request. The collection coordinate is priced; the address
+ * and contact are the separate movement Operations has to make.
+ */
+export interface SpecialPickupRequest {
+  service: 'special_pickup';
+  pickup: Coordinate;
+  destination: Coordinate;
+  collection: Coordinate & CollectionContact;
+}
+
+/** Order creation. A price preview stays a QuoteRequest and has no contact. */
+export type OrderRequest =
+  Exclude<QuoteRequest, { service: 'special_pickup' }> | SpecialPickupRequest;
+
 export interface AreaBox {
   minLatitude: number;
   maxLatitude: number;
@@ -145,6 +168,21 @@ export interface PriceQuote {
   collectionPlace: Place | null;
 }
 
+/**
+ * The extra collection movement. Null on Standard Delivery and Errand.
+ * `kind` keeps this leg from being read as the delivery pickup.
+ */
+export interface CollectionLeg {
+  kind: 'collection';
+  address: string;
+  landmark: string | null;
+  contactName: string;
+  contactPhone: string;
+  latitude: number;
+  longitude: number;
+  place: Place;
+}
+
 /** Persisted price snapshot. manual_quoted means operations set totalKobo. */
 export interface PricedOrder {
   id: string;
@@ -157,4 +195,12 @@ export interface PricedOrder {
   pickupPlace: Place | null;
   destinationPlace: Place | null;
   collectionPlace: Place | null;
+  /** Separate from the delivery pickup. Null unless the service is Special Pickup. */
+  collection: CollectionLeg | null;
+}
+
+/** What Operations lists. The collection leg is how the extra stop is identified. */
+export interface OperationsOrder extends PricedOrder {
+  customerId: string;
+  createdAt: Date;
 }
