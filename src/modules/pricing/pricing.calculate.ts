@@ -2,7 +2,9 @@ import { classifySpecialPickup, classifyZone } from './pricing.classify.js';
 import {
   PricingConfigurationError,
   amountDue,
-  assertPositiveNaira,
+  assertPositiveKobo,
+  isChargeableKobo,
+  sumWithinChargeLimit,
 } from './pricing.money.js';
 import {
   CURRENCY,
@@ -61,23 +63,29 @@ function money(
   component: PricingComponent,
   tier: string,
   byTier: RuleIndex,
-): { quoteMode: QuoteMode; amountNaira: number | null } {
+): { quoteMode: QuoteMode; amountKobo: number | null } {
   const rule = findRule(byTier, component, tier);
-  const manualWithAmount =
-    rule.quoteMode === 'manual' && rule.amountNaira !== null;
-  const automaticWithoutAmount =
-    rule.quoteMode === 'automatic' && rule.amountNaira === null;
-  if (manualWithAmount || automaticWithoutAmount) {
+  if (rule.quoteMode === 'manual') {
+    const minimum = rule.minimumKobo;
+    if (
+      rule.amountKobo !== null ||
+      minimum === null ||
+      !isChargeableKobo(minimum)
+    ) {
+      throw new PricingConfigurationError(
+        `${component}/${tier} breaks the automatic/manual amount rule`,
+      );
+    }
+    return { quoteMode: 'manual', amountKobo: null };
+  }
+  if (rule.amountKobo === null || rule.minimumKobo !== null) {
     throw new PricingConfigurationError(
       `${component}/${tier} breaks the automatic/manual amount rule`,
     );
   }
-  if (rule.quoteMode === 'manual') {
-    return { quoteMode: 'manual', amountNaira: null };
-  }
   return {
     quoteMode: 'automatic',
-    amountNaira: assertPositiveNaira(rule.amountNaira, `${component}/${tier}`),
+    amountKobo: assertPositiveKobo(rule.amountKobo, `${component}/${tier}`),
   };
 }
 
@@ -143,13 +151,56 @@ function componentsFor(
   }
 }
 
-function finish(components: PriceComponentQuote[]): PriceQuote {
-  const totalNaira = amountDue(components);
+/**
+ * The manual quote is the whole amount due, so the floor is every automatic
+ * leg plus every manual leg's minimum. A later edit to the price list does
+ * not change a floor already copied onto the order.
+ */
+function manualFloor(
+  components: readonly PriceComponentQuote[],
+  byTier: RuleIndex,
+): number {
+  const parts = components.map((component) => {
+    if (component.quoteMode === 'automatic') {
+      return assertPositiveKobo(component.amountKobo, component.component);
+    }
+    const rule = findRule(byTier, component.component, component.tier);
+    return assertPositiveKobo(
+      rule.minimumKobo,
+      `${component.component}/${component.tier} minimum`,
+    );
+  });
+  return sumWithinChargeLimit(parts);
+}
+
+function placesOf(input: QuoteInput): {
+  pickupPlace: Place | null;
+  destinationPlace: Place | null;
+  collectionPlace: Place | null;
+} {
   return {
-    pricingStatus: totalNaira === null ? 'pending_manual_quote' : 'auto',
+    pickupPlace: 'pickup' in input ? (input.pickup ?? null) : null,
+    destinationPlace:
+      'destination' in input ? (input.destination ?? null) : null,
+    collectionPlace:
+      input.service === 'special_pickup' ? input.collection : null,
+  };
+}
+
+function finish(
+  input: QuoteInput,
+  components: PriceComponentQuote[],
+  byTier: RuleIndex,
+): PriceQuote {
+  const totalKobo = amountDue(components);
+  return {
+    pricingStatus: totalKobo === null ? 'pending_manual_quote' : 'auto',
     currency: CURRENCY,
     components,
-    totalNaira,
+    totalKobo,
+    minimumTotalKobo:
+      totalKobo === null ? manualFloor(components, byTier) : null,
+    ...placesOf(input),
   };
 }
 
@@ -162,5 +213,6 @@ export function calculatePrice(
   input: QuoteInput,
   rules: readonly PriceRuleRecord[],
 ): PriceQuote {
-  return finish(componentsFor(input, indexRules(rules)));
+  const byTier = indexRules(rules);
+  return finish(input, componentsFor(input, byTier), byTier);
 }

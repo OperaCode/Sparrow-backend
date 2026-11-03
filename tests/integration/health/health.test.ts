@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { afterAll, describe, expect, it } from 'vitest';
-import { createHealthRepository } from '../../../src/modules/health/health.repository.js';
+import { createHealthRepository } from '#src/modules/health/health.repository.js';
 import { buildTestApp } from '../../helpers/app.js';
 import { createTestPrisma } from '../../helpers/database.js';
 

@@ -1,25 +1,26 @@
-import { Router, type Express } from 'express';
-import type { RouteGuards, V1Module } from '../../src/api/v1/router.js';
-import { createApp } from '../../src/app.js';
-import { loadConfig, type Config } from '../../src/config/env.js';
-import type { AuthSubjectLookup } from '../../src/http/middleware/authenticate.js';
-import { sendData } from '../../src/http/response.js';
-import { createLogger, type Logger } from '../../src/lib/logger.js';
-import { signAccessToken } from '../../src/modules/auth/access-token.service.js';
-import type { HealthRepository } from '../../src/modules/health/health.repository.js';
+import { Router, type Express } from "express";
+import type { RouteGuards, V1Module } from "#src/api/v1/router.js";
+import { createApp } from "#src/app.js";
+import { loadConfig, type Config } from "#src/config/env.js";
+import type { AuthSubjectLookup } from "#src/http/middleware/authenticate.js";
+import { sendData } from "#src/http/response.js";
+import type { IdempotencyStore } from "#src/types/idempotency.js";
+import { createLogger, type Logger } from "#src/lib/logger.js";
+import { signAccessToken } from "#src/modules/auth/access-token.service.js";
+import type { HealthRepository } from "#src/modules/health/health.repository.js";
 import {
   createHealthService,
   type HealthService,
-} from '../../src/modules/health/health.service.js';
-import { createLogCapture, type LogCapture } from './log-capture.js';
+} from "#src/modules/health/health.service.js";
+import { createLogCapture, type LogCapture } from "./log-capture.js";
 
-export const TEST_JWT_SECRET = 'test-only-secret-never-used-outside-tests';
+export const TEST_JWT_SECRET = "test-only-secret-never-used-outside-tests";
 
 export function testConfig(overrides: NodeJS.ProcessEnv = {}): Config {
   return loadConfig({
-    NODE_ENV: 'test',
-    LOG_LEVEL: 'info',
-    DATABASE_URL: 'postgresql://unused:unused@localhost:5433/unused_test',
+    NODE_ENV: "test",
+    LOG_LEVEL: "info",
+    DATABASE_URL: "postgresql://unused:unused@localhost:5433/unused_test",
     JWT_ACCESS_SECRET: TEST_JWT_SECRET,
     ...overrides,
   });
@@ -34,31 +35,37 @@ export const noSubjects: AuthSubjectLookup = {
 };
 
 /**
- * Test-only module exercising the auth foundation through the real app,
- * since no production route is protected yet.
+ * Test-only module exercising authentication and role gates through the
+ * real app.
  */
 export const protectedTestModule: V1Module = {
-  path: '/test-protected',
+  path: "/test-protected",
   createRouter({ authenticate, requireRole }: RouteGuards) {
     const router = Router();
-    router.get('/any', authenticate, (req, res) => {
+    router.get("/any", authenticate, (req, res) => {
       sendData(res, req.auth);
     });
-    router.get('/admin', authenticate, requireRole('admin'), (req, res) => {
+    router.get("/admin", authenticate, requireRole("admin"), (req, res) => {
       sendData(res, req.auth);
     });
     router.get(
-      '/staff',
+      "/staff",
       authenticate,
-      requireRole('rider', 'admin'),
+      requireRole("rider", "admin"),
       (req, res) => {
         sendData(res, req.auth);
       },
     );
-    router.get('/misconfigured', requireRole('admin'), (_req, res) => {
+    router.get("/misconfigured", requireRole("admin"), (_req, res) => {
       sendData(res, null);
     });
     return router;
+  },
+};
+
+const unconfiguredIdempotency: IdempotencyStore = {
+  recover() {
+    return Promise.reject(new Error("idempotency store was not configured"));
   },
 };
 
@@ -67,6 +74,7 @@ interface TestAppOptions {
   healthRepository?: HealthRepository;
   healthService?: HealthService;
   authSubjects?: AuthSubjectLookup;
+  idempotency?: IdempotencyStore;
   v1Modules?: readonly V1Module[];
 }
 
@@ -96,6 +104,7 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
     logger,
     healthService,
     authSubjects: options.authSubjects ?? noSubjects,
+    idempotency: options.idempotency ?? unconfiguredIdempotency,
     v1Modules: options.v1Modules ?? [],
   });
   return { app, config, logs, logger };

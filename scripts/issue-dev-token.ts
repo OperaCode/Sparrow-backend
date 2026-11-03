@@ -1,9 +1,9 @@
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
-import { ConfigError, loadConfig, type Config } from '../src/config/env.js';
-import { createPrismaClient } from '../src/lib/prisma.js';
-import { signAccessToken } from '../src/modules/auth/access-token.service.js';
-import { ROLES } from '../src/types/auth.js';
+import { ConfigError, loadConfig, type Config } from '#src/config/env.js';
+import { createPrismaClient } from '#src/lib/prisma.js';
+import { signAccessToken } from '#src/modules/auth/access-token.service.js';
+import { ROLES } from '#src/types/auth.js';
 
 const USAGE =
   'Usage: npm run token:dev -- --phone +2348012345678 --role customer|rider|admin';
@@ -68,8 +68,10 @@ async function main(): Promise<void> {
   assertLocalDevelopment(config);
   const args = parseCliArgs();
 
-  // Writes through Prisma directly on purpose: no user-creation path exists in
-  // application code until the OTP issue adds one.
+  // Local bootstrap for the first admin. It may set a role because it only
+  // runs in development against localhost. Application code creates customers
+  // through UsersService.openVerifiedCustomer after the phone is verified,
+  // and creates further admins through POST /api/v1/users.
   const prisma = createPrismaClient(config.databaseUrl);
   try {
     const user = await prisma.user.upsert({
@@ -89,7 +91,7 @@ async function main(): Promise<void> {
     );
     if (user.status !== 'active') {
       process.stderr.write(
-        'Warning: this user is suspended, so the token will be rejected.\n',
+        `Warning: this user is ${user.status}, so the token will be rejected.\n`,
       );
     }
     // Only the token goes to stdout, so it can be captured by a shell.

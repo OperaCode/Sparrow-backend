@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createLogger, REDACTED } from '../../../src/lib/logger.js';
+import { createLogger, REDACTED } from '#src/lib/logger.js';
 import { createLogCapture } from '../../helpers/log-capture.js';
 
 describe('createLogger', () => {

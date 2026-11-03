@@ -1,14 +1,14 @@
 import express, { type Request } from 'express';
 import request from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
-import { createHttpLogger } from '../../../src/http/middleware/http-logger.js';
+import { createHttpLogger } from '#src/http/middleware/http-logger.js';
 import {
   getRequestId,
   REQUEST_ID_HEADER,
   requestId,
   resolveRequestId,
-} from '../../../src/http/middleware/request-id.js';
-import { createLogger } from '../../../src/lib/logger.js';
+} from '#src/http/middleware/request-id.js';
+import { createLogger } from '#src/lib/logger.js';
 import { createLogCapture } from '../../helpers/log-capture.js';
 
 const UUID =

@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
-import type { AuthSubjectLookup } from '../../../src/http/middleware/authenticate.js';
-import type { AccountStatus, Role } from '../../../src/types/auth.js';
+import type { AuthSubjectLookup } from '#src/http/middleware/authenticate.js';
+import type { AccountStatus, Role } from '#src/types/auth.js';
 import {
   buildTestApp,
   protectedTestModule,
@@ -76,6 +76,15 @@ describe('authenticate', () => {
       .expect(403);
 
     expect(errorOf(response).code).toBe('ACCOUNT_SUSPENDED');
+  });
+
+  it('returns 403 ACCOUNT_DEACTIVATED for a deactivated user', async () => {
+    const response = await request(appWith('customer', 'deactivated'))
+      .get('/api/v1/test-protected/any')
+      .set('Authorization', `Bearer ${await tokenFor(USER_ID)}`)
+      .expect(403);
+
+    expect(errorOf(response).code).toBe('ACCOUNT_DEACTIVATED');
   });
 
   it('accepts a lowercase bearer scheme', async () => {

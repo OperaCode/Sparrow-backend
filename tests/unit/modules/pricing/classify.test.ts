@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   classifySpecialPickup,
   classifyZone,
-} from '../../../../src/modules/pricing/pricing.classify.js';
+} from '#src/modules/pricing/pricing.classify.js';
 import type {
   Place,
   SpecialPickupTier,
   ZoneTier,
-} from '../../../../src/modules/pricing/pricing.types.js';
+} from '#src/modules/pricing/pricing.types.js';
 
 const zonePairs: readonly (readonly [Place, Place, ZoneTier])[] = [
   ['igbesa', 'igbesa', 'A'],

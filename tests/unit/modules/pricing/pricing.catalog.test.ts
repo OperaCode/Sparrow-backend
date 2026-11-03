@@ -1,10 +1,12 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { APPROVED_SERVICE_AREAS } from '../../../../src/modules/pricing/pricing.areas.js';
+import { APPROVED_PRICE_RULES } from '../../../../src/modules/pricing/pricing.catalog.js';
 import {
-  APPROVED_PRICE_RULES,
   priceRuleSqlTuple,
-} from '../../../../src/modules/pricing/pricing.catalog.js';
+  serviceAreaSqlTuple,
+} from '../../../helpers/pricing.js';
 import {
   ERRAND_TIERS,
   SPECIAL_PICKUP_TIERS,
@@ -34,49 +36,58 @@ describe('approved V1 price list', () => {
     expect([...approvedByTier.keys()].sort()).toEqual([...expected].sort());
   });
 
-  it('matches the approved naira amounts', () => {
+  it('matches the approved kobo amounts', () => {
     expect(rule('standard_zone', 'A')).toMatchObject({
-      amountNaira: 800,
+      amountKobo: 80000,
       quoteMode: 'automatic',
     });
     expect(rule('standard_zone', 'B')).toMatchObject({
-      amountNaira: 1000,
+      amountKobo: 100000,
       quoteMode: 'automatic',
     });
     expect(rule('standard_zone', 'C')).toMatchObject({
-      amountNaira: 1300,
+      amountKobo: 130000,
       quoteMode: 'automatic',
     });
     expect(rule('standard_zone', 'extended')).toMatchObject({
-      amountNaira: null,
+      amountKobo: null,
+      minimumKobo: 150000,
       quoteMode: 'manual',
     });
     expect(rule('standard_zone', 'outside_area')).toMatchObject({
-      amountNaira: null,
+      amountKobo: null,
+      minimumKobo: 150000,
       quoteMode: 'manual',
     });
     expect(rule('special_pickup', 'local')).toMatchObject({
-      amountNaira: 500,
+      amountKobo: 50000,
       quoteMode: 'automatic',
     });
     expect(rule('special_pickup', 'nearby')).toMatchObject({
-      amountNaira: 700,
+      amountKobo: 70000,
       quoteMode: 'automatic',
     });
     expect(rule('special_pickup', 'extended')).toMatchObject({
-      amountNaira: null,
+      amountKobo: null,
+      minimumKobo: 100000,
+      quoteMode: 'manual',
+    });
+    expect(rule('special_pickup', 'outside_area')).toMatchObject({
+      amountKobo: null,
+      minimumKobo: 100000,
       quoteMode: 'manual',
     });
     expect(rule('errand', 'simple')).toMatchObject({
-      amountNaira: 500,
+      amountKobo: 50000,
       quoteMode: 'automatic',
     });
     expect(rule('errand', 'moderate')).toMatchObject({
-      amountNaira: 700,
+      amountKobo: 70000,
       quoteMode: 'automatic',
     });
     expect(rule('errand', 'complex')).toMatchObject({
-      amountNaira: null,
+      amountKobo: null,
+      minimumKobo: 100000,
       quoteMode: 'manual',
     });
   });
@@ -94,6 +105,9 @@ describe('approved V1 price list', () => {
 
     for (const approved of APPROVED_PRICE_RULES) {
       expect(migrations).toContain(priceRuleSqlTuple(approved));
+    }
+    for (const area of APPROVED_SERVICE_AREAS) {
+      expect(migrations).toContain(serviceAreaSqlTuple(area));
     }
   });
 });

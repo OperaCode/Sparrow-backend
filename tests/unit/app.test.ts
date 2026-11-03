@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
-import { REQUEST_ID_HEADER } from '../../src/http/middleware/request-id.js';
+import { REQUEST_ID_HEADER } from '#src/http/middleware/request-id.js';
 import { buildTestApp } from '../helpers/app.js';
 import { errorOf } from '../helpers/http.js';
 
